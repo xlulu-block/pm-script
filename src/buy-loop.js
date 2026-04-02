@@ -1,7 +1,8 @@
-import { appendFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { config } from "./config.js";
 import { fetchAllActiveMarkets } from "./gamma.js";
 import { filterMarkets } from "./filters.js";
+import { appendJsonlWithRotation } from "./persistence.js";
 import {
   getAccountOpenOrders,
   placeOrdersBatch,
@@ -39,8 +40,10 @@ function logCategorySummary(categoryCounts, excludedCounts) {
 }
 
 async function appendOrderErrorLog(entry) {
-  const payload = `${JSON.stringify(entry)}\n`;
-  await appendFile(config.ERROR_LOG_FILE, payload, "utf8");
+  await appendJsonlWithRotation(config.ERROR_LOG_FILE, entry, {
+    maxBytes: config.ERROR_LOG_MAX_BYTES,
+    keepFiles: config.LOG_ROTATION_KEEP_FILES,
+  });
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

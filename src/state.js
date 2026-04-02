@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, access } from "node:fs/promises";
-import { appendFile } from "node:fs/promises";
 import { config } from "./config.js";
+import { appendJsonlWithRotation } from "./persistence.js";
 import { States, isTerminal, validateTransition } from "./state-machine.js";
 
 const LEGACY_STATE_ALIASES = Object.freeze({
@@ -10,6 +10,28 @@ const LEGACY_STATE_ALIASES = Object.freeze({
 
 function createEmptyState() {
   return { tokens: {} };
+}
+
+function compactTrackedTokenForSave(token) {
+  const result = {
+    state: token.state,
+    lastActionAt: token.lastActionAt,
+    createdAt: token.createdAt,
+  };
+
+  if (token.question) result.question = token.question;
+  if (token.category) result.category = token.category;
+  if (token.slug) result.slug = token.slug;
+  if (token.buyOrderId) result.buyOrderId = token.buyOrderId;
+  if (token.sellOrderId) result.sellOrderId = token.sellOrderId;
+  if (Number.isFinite(token.filledShares) && token.filledShares !== 0) result.filledShares = token.filledShares;
+  if (token.sellPrice !== null && token.sellPrice !== undefined) result.sellPrice = token.sellPrice;
+  if (token.lastSeenBidSharesAtOrderPrice !== null && token.lastSeenBidSharesAtOrderPrice !== undefined) {
+    result.lastSeenBidSharesAtOrderPrice = token.lastSeenBidSharesAtOrderPrice;
+  }
+  if (token.lastError) result.lastError = token.lastError;
+
+  return result;
 }
 
 function normalizeTrackedToken(tokenID, token = {}) {
@@ -100,9 +122,14 @@ export async function loadState(path) {
 }
 
 export async function saveState(path, state) {
-  const payload = { tokens: state.tokens, updatedAt: new Date().toISOString() };
+  const compactTokens = {};
+  for (const [tokenID, token] of Object.entries(state.tokens || {})) {
+    compactTokens[tokenID] = compactTrackedTokenForSave(token);
+  }
+
+  const payload = { tokens: compactTokens, updatedAt: new Date().toISOString() };
   const tmpPath = path + ".tmp";
-  await writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+  await writeFile(tmpPath, JSON.stringify(payload), "utf8");
   await rename(tmpPath, path);
 }
 
@@ -140,7 +167,10 @@ export async function transitionToken(state, tokenID, newState, extraFields = {}
     question: token.question,
     details: extraFields,
   };
-  await appendFile(config.STATE_CHANGE_LOG_FILE, JSON.stringify(entry) + "\n", "utf8").catch(() => {});
+  await appendJsonlWithRotation(config.STATE_CHANGE_LOG_FILE, entry, {
+    maxBytes: config.STATE_CHANGE_LOG_MAX_BYTES,
+    keepFiles: config.LOG_ROTATION_KEEP_FILES,
+  }).catch(() => {});
   return token;
 }
 

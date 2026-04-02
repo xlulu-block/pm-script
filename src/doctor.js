@@ -98,6 +98,7 @@ async function loadStateTokenIDs() {
   try {
     const raw = JSON.parse(await readFile(config.STATE_FILE, "utf8"));
     return takeUnique([
+      ...Object.keys(raw?.tokens || {}),
       ...Object.keys(raw?.orderedTokens || {}),
       ...Object.keys(raw?.boughtTokens || {}),
     ]);

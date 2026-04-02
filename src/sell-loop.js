@@ -32,7 +32,6 @@ import {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const BALANCE_DISCOVERY_CONCURRENCY = 8;
-const SELL_PROGRESS_STEP = 25;
 
 async function mapWithConcurrency(items, limit, worker) {
   const results = new Array(items.length);
@@ -53,10 +52,11 @@ function getSellScanConcurrency() {
   return Math.max(1, Number(config.SELL_SCAN_CONCURRENCY || BALANCE_DISCOVERY_CONCURRENCY));
 }
 
-function createProgressReporter(label, total, step = SELL_PROGRESS_STEP) {
+function createProgressReporter(label, total, step = config.SELL_PROGRESS_STEP) {
   if (total <= 0) return () => {};
 
-  const effectiveStep = total <= step ? total : step;
+  const normalizedStep = Math.max(1, Number(step) || 1);
+  const effectiveStep = total <= normalizedStep ? total : normalizedStep;
   let completed = 0;
 
   return () => {
@@ -157,7 +157,8 @@ async function syncStateWithAccount(client, state, openOrderSnapshot) {
 
   for (const { tokenID, balance } of balances) {
     const orderSnapshot = getOpenOrdersForTokenFromSnapshot(openOrderSnapshot, tokenID);
-    const nextState = inferTrackedState(balance, orderSnapshot);
+    const heldShares = getHeldShares(balance, orderSnapshot.sellOrders);
+    const nextState = inferTrackedState(heldShares, orderSnapshot);
     const existing = getToken(state, tokenID);
 
     if (!nextState) {
@@ -169,7 +170,7 @@ async function syncStateWithAccount(client, state, openOrderSnapshot) {
       buyOrderId: orderSnapshot.buyOrders[0]?.id || null,
       sellOrderId: orderSnapshot.sellOrders[0]?.id || null,
       sellPrice: inferTrackedSellPrice(orderSnapshot),
-      filledShares: balance,
+      filledShares: heldShares,
       lastError: null,
     };
 
@@ -219,6 +220,19 @@ function getRemainingOrderSize(order) {
   const matchedSize = Number(order?.size_matched || 0);
   if (!Number.isFinite(originalSize) || !Number.isFinite(matchedSize)) return null;
   return Math.max(0, originalSize - matchedSize);
+}
+
+function getTotalOpenSellSize(sellOrders) {
+  return sellOrders.reduce((total, order) => {
+    const remainingSize = getRemainingOrderSize(order);
+    return total + (remainingSize ?? 0);
+  }, 0);
+}
+
+function getHeldShares(balance, sellOrders) {
+  const availableBalance = Number(balance || 0);
+  const normalizedAvailableBalance = Number.isFinite(availableBalance) ? Math.max(0, availableBalance) : 0;
+  return normalizedAvailableBalance + getTotalOpenSellSize(sellOrders);
 }
 
 function isSizeAligned(orderSize, balance) {
@@ -339,7 +353,9 @@ async function forceClearMarket(client, state, token, orderBook, balance, buyOrd
     }
   }
 
-  const freshBalance = buyOrders.length > 0 ? await getFilledShares(client, token.tokenID) : balance;
+  const freshBalance = buyOrders.length > 0
+    ? getHeldShares(await getFilledShares(client, token.tokenID), sellOrders)
+    : balance;
   if (freshBalance <= 0) {
     const terminalState = token.state === States.BUY_OPEN ? States.BUY_CLOSED_NO_FILL : States.DUST;
     await transitionToken(state, token.tokenID, terminalState, {
@@ -560,33 +576,33 @@ async function processSellableTokens(client, state, openOrderSnapshot) {
 }
 
 async function processSingleSellToken(client, state, token, openOrderSnapshot) {
-  const balance = await getFilledShares(client, token.tokenID);
-  let trackedToken = getToken(state, token.tokenID);
-  if (trackedToken) trackedToken.filledShares = balance;
-
   const { buyOrders, sellOrders } = getOpenOrdersForTokenFromSnapshot(openOrderSnapshot, token.tokenID);
+  const balance = await getFilledShares(client, token.tokenID);
+  const heldShares = getHeldShares(balance, sellOrders);
+  let trackedToken = getToken(state, token.tokenID);
+  if (trackedToken) trackedToken.filledShares = heldShares;
   const sellOrderInfo = inspectSellOrders(sellOrders);
 
-  // Open BUY orders with zero filled balance are not actionable sell inventory.
-  if (buyOrders.length > 0 && balance <= 0 && token.state === States.BUY_OPEN) {
+  // Open BUY orders with zero held shares are not actionable sell inventory.
+  if (buyOrders.length > 0 && heldShares <= 0 && token.state === States.BUY_OPEN) {
     return;
   }
 
   if (
     buyOrders.length === 0 &&
-    balance > 0 &&
+    heldShares > 0 &&
     (token.state === States.BUY_OPEN || token.state === States.PARTIAL_FILL)
   ) {
     console.log(`[SELL] ${token.question} 当前 balance=${balance} 且已无买单，提升为 filled_wait_sell`);
     await transitionToken(state, token.tokenID, States.FILLED_WAIT_SELL, {
-      filledShares: balance,
+      filledShares: heldShares,
       buyOrderId: null,
     });
     token = getToken(state, token.tokenID) || token;
     trackedToken = getToken(state, token.tokenID) || trackedToken;
   }
 
-  if (sellOrders.length > 0 && balance <= 0) {
+  if (sellOrders.length > 0 && heldShares <= 0) {
     console.log(`[SELL] ${token.question || token.tokenID} 已无余额，正在取消陈旧卖单`);
     const cancelResult = await cancelOrdersForToken(client, token.tokenID, "SELL");
     if (cancelResult.success) {
@@ -603,7 +619,7 @@ async function processSingleSellToken(client, state, token, openOrderSnapshot) {
     return;
   }
 
-  if (buyOrders.length === 0 && sellOrders.length === 0 && balance <= 0) {
+  if (buyOrders.length === 0 && sellOrders.length === 0 && heldShares <= 0) {
     const terminalState =
       token.state === States.BUY_OPEN
         ? States.BUY_CLOSED_NO_FILL
@@ -651,7 +667,7 @@ async function processSingleSellToken(client, state, token, openOrderSnapshot) {
       state,
       token,
       decision.orderBook,
-      balance,
+      heldShares,
       buyOrders,
       sellOrders,
       getForceExitReason(depth, getDepthThreshold(config))
@@ -667,19 +683,19 @@ async function processSingleSellToken(client, state, token, openOrderSnapshot) {
     if (
       sellOrderInfo.hasSellAtTargetPrice &&
       sellOrders.length === 1 &&
-      isSizeAligned(getRemainingOrderSize(sellOrderInfo.firstSellAtTargetPrice), balance)
+      isSizeAligned(getRemainingOrderSize(sellOrderInfo.firstSellAtTargetPrice), heldShares)
     ) {
       await syncTrackedSell(
         state,
         token,
-        balance,
+        heldShares,
         sellOrderInfo.firstSellAtTargetPrice?.id || null,
         targetSellPrice
       );
     } else if (
       sellOrderInfo.hasSellAtBuyPrice &&
       sellOrders.length === 1 &&
-      isSizeAligned(getRemainingOrderSize(sellOrderInfo.firstSellAtBuyPrice), balance)
+      isSizeAligned(getRemainingOrderSize(sellOrderInfo.firstSellAtBuyPrice), heldShares)
     ) {
       const buyPrice = getBuyPriceLevel(config);
       const replaceCooldownRemainingMs = getReplaceCooldownRemainingMs(token);
@@ -703,7 +719,7 @@ async function processSingleSellToken(client, state, token, openOrderSnapshot) {
         await syncTrackedSell(
           state,
           token,
-          balance,
+          heldShares,
           sellOrderInfo.firstSellAtBuyPrice?.id || null,
           buyPrice
         );
@@ -712,12 +728,12 @@ async function processSingleSellToken(client, state, token, openOrderSnapshot) {
     return;
   }
 
-  const result = await placeSellOrder(client, token.tokenID, targetSellPrice, balance, {
+  const result = await placeSellOrder(client, token.tokenID, targetSellPrice, heldShares, {
     tickSize: decision.orderBook.tick_size,
     negRisk: decision.orderBook.neg_risk,
   });
   if (result.success) {
-    await syncTrackedSell(state, token, balance, result.orderID, targetSellPrice);
+    await syncTrackedSell(state, token, heldShares, result.orderID, targetSellPrice);
   }
 }
 
@@ -730,24 +746,24 @@ async function checkSellOrderStatuses(client, state, openOrderSnapshot) {
   await runTokenStage(sellTokens, "卖单状态进度", async (token) => {
     await withTokenLock(token.tokenID, async () => {
       try {
-        const balance = await getFilledShares(client, token.tokenID);
-        const trackedToken = getToken(state, token.tokenID);
-        if (trackedToken) trackedToken.filledShares = balance;
-
         const { sellOrders } = getOpenOrdersForTokenFromSnapshot(openOrderSnapshot, token.tokenID);
+        const balance = await getFilledShares(client, token.tokenID);
+        const heldShares = getHeldShares(balance, sellOrders);
+        const trackedToken = getToken(state, token.tokenID);
+        if (trackedToken) trackedToken.filledShares = heldShares;
 
-        if (sellOrders.length === 0 && balance <= 0) {
+        if (sellOrders.length === 0 && heldShares <= 0) {
           console.log(`[SELL] ${token.question} 已全部卖出`);
           await transitionToken(state, token.tokenID, States.SOLD, {
             filledShares: 0,
             sellOrderId: null,
             sellPrice: null,
           });
-        } else if (sellOrders.length === 0 && balance > 0) {
+        } else if (sellOrders.length === 0 && heldShares > 0) {
           console.log(`[SELL] ${token.question} 的卖单已消失，但余额仍在，balance=${balance}`);
           await transitionToken(state, token.tokenID, States.FILLED_WAIT_SELL, {
             sellOrderId: null,
-            filledShares: balance,
+            filledShares: heldShares,
           });
         }
       } catch (err) {
