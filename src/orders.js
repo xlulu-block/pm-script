@@ -1,5 +1,8 @@
 import { AssetType, OrderType, Side } from "@polymarket/clob-client";
+import { ethers } from "ethers";
 import { config } from "./config.js";
+
+const CONDITIONAL_TOKEN_DECIMALS = 6;
 
 function getErrorMessage(err) {
   if (typeof err === "string") return err;
@@ -83,7 +86,7 @@ export async function getFilledShares(client, tokenID) {
       asset_type: AssetType.CONDITIONAL,
       token_id: tokenID,
     });
-    return Number(result?.balance || 0);
+    return Number(ethers.utils.formatUnits(result?.balance || "0", CONDITIONAL_TOKEN_DECIMALS));
   } catch (err) {
     console.warn(`[ORDER] 获取 token ${tokenID.slice(0, 12)}... 的余额失败: ${getErrorMessage(err)}`);
     return 0;
