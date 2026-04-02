@@ -11,7 +11,7 @@ export function createCircuitBreaker(cfg) {
       this.consecutiveErrors++;
       if (this.consecutiveErrors >= this.threshold) {
         this.paused = true;
-        console.warn(`[RISK] Circuit breaker tripped after ${this.consecutiveErrors} consecutive errors`);
+        console.warn(`[RISK] 连续错误达到 ${this.consecutiveErrors} 次，已触发熔断`);
       }
     },
     isPaused() {

@@ -56,12 +56,12 @@ function dedupeContexts(contexts) {
 function buildContexts() {
   return dedupeContexts([
     {
-      label: "EOA signer context",
+      label: "EOA 签名上下文",
       signatureType: 0,
       funderAddress: null,
     },
     {
-      label: `Configured ${formatSignatureType(config.SIGNATURE_TYPE)} context`,
+      label: `当前配置的 ${formatSignatureType(config.SIGNATURE_TYPE)} 上下文`,
       signatureType: config.SIGNATURE_TYPE,
       funderAddress: config.EFFECTIVE_FUNDER_ADDRESS || null,
     },
@@ -110,7 +110,7 @@ async function resolveInspectionTokenIDs(buyTrades) {
   const maxTokens = parseNumberFlag("--limit", hasFlag("--from-state") ? 25 : 30);
   const cliTokenIDs = parseCliTokenIDs();
   if (cliTokenIDs.length > 0) {
-    console.log(`[Doctor] Using ${cliTokenIDs.length} token ID(s) from --token`);
+    console.log(`[Doctor] 使用 --token 指定的 ${cliTokenIDs.length} 个 token ID`);
     return cliTokenIDs.slice(0, maxTokens);
   }
 
@@ -119,7 +119,7 @@ async function resolveInspectionTokenIDs(buyTrades) {
   if (preferState) {
     const selected = stateTokenIDs.slice(0, maxTokens);
     console.log(
-      `[Doctor] Using ${selected.length}/${stateTokenIDs.length} token ID(s) from ${config.STATE_FILE} (limit=${maxTokens})`
+      `[Doctor] 从 ${config.STATE_FILE} 中使用 ${selected.length}/${stateTokenIDs.length} 个 token ID（limit=${maxTokens}）`
     );
     return selected;
   }
@@ -130,13 +130,13 @@ async function resolveInspectionTokenIDs(buyTrades) {
       ...takeUnique(buyTrades.map((trade) => trade.asset_id)),
     ]).slice(0, maxTokens);
     console.log(
-      `[Doctor] Using ${merged.length} token ID(s) merged from ${config.STATE_FILE} and recent BUY trades (limit=${maxTokens})`
+      `[Doctor] 使用从 ${config.STATE_FILE} 与近期 BUY 交易合并得到的 ${merged.length} 个 token ID（limit=${maxTokens}）`
     );
     return merged;
   }
 
   const recentTradeTokenIDs = takeUnique(buyTrades.map((trade) => trade.asset_id)).slice(0, maxTokens);
-  console.log(`[Doctor] Using ${recentTradeTokenIDs.length} recent BUY trade token ID(s) (limit=${maxTokens})`);
+  console.log(`[Doctor] 使用近期 BUY 交易中的 ${recentTradeTokenIDs.length} 个 token ID（limit=${maxTokens}）`);
   return recentTradeTokenIDs;
 }
 
@@ -146,7 +146,7 @@ async function inspectConditionalBalances(client, tokenIDs) {
   for (let i = 0; i < tokenIDs.length; i++) {
     const tokenID = tokenIDs[i];
     if (i === 0 || (i + 1) % 10 === 0 || i === tokenIDs.length - 1) {
-      console.log(`[Doctor] Conditional balance progress: ${i + 1}/${tokenIDs.length}`);
+      console.log(`[Doctor] 条件仓位余额检查进度: ${i + 1}/${tokenIDs.length}`);
     }
     const balance = await client.getBalanceAllowance({
       asset_type: AssetType.CONDITIONAL,
@@ -166,7 +166,7 @@ async function inspectOnchainConditionalBalances(account, tokenIDs) {
   for (let i = 0; i < tokenIDs.length; i++) {
     const tokenID = tokenIDs[i];
     if (i === 0 || (i + 1) % 10 === 0 || i === tokenIDs.length - 1) {
-      console.log(`[Doctor] On-chain balance progress: ${i + 1}/${tokenIDs.length}`);
+      console.log(`[Doctor] 链上余额检查进度: ${i + 1}/${tokenIDs.length}`);
     }
     const balance = await ctf.balanceOf(account, tokenID);
     balances.push({
@@ -194,12 +194,12 @@ function scoreContext(summary) {
 async function inspectContext(context, signerAddress) {
   const effectiveAccount = context.funderAddress || signerAddress;
 
-  console.log(`=== Context: ${context.label} ===`);
-  console.log(`Signer: ${signerAddress}`);
+  console.log(`=== 上下文: ${context.label} ===`);
+  console.log(`签名地址: ${signerAddress}`);
   console.log(
-    `Signature type: ${formatSignatureType(context.signatureType)} (${context.signatureType})`
+    `签名类型: ${formatSignatureType(context.signatureType)} (${context.signatureType})`
   );
-  console.log(`Effective funder/maker: ${effectiveAccount}`);
+  console.log(`生效的 funder/maker: ${effectiveAccount}`);
 
   const client = await initClobClient({
     ensureCollateral: false,
@@ -211,7 +211,7 @@ async function inspectContext(context, signerAddress) {
   await client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
   const collateral = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
   console.log(
-    `[Doctor] CLOB collateral cache balance=${collateral.balance ?? "n/a"}, allowance=${collateral.allowance ?? "n/a"}`
+    `[Doctor] CLOB collateral 缓存 balance=${collateral.balance ?? "n/a"}, allowance=${collateral.allowance ?? "n/a"}`
   );
 
   const [openOrders, trades] = await Promise.all([
@@ -219,33 +219,33 @@ async function inspectContext(context, signerAddress) {
     client.getTrades(undefined, true),
   ]);
 
-  console.log(`[Doctor] Open orders fetched: ${openOrders.length}`);
-  console.log(`[Doctor] Trades fetched (first page): ${trades.length}`);
+  console.log(`[Doctor] 已获取挂单数量: ${openOrders.length}`);
+  console.log(`[Doctor] 已获取交易数量（第一页）: ${trades.length}`);
 
   const buyTrades = trades.filter((trade) => trade.side === "BUY");
   const sampleTokenIDs = await resolveInspectionTokenIDs(buyTrades);
 
-  console.log(`[Doctor] BUY trades on first page: ${buyTrades.length}`);
+  console.log(`[Doctor] 第一页 BUY 交易数量: ${buyTrades.length}`);
 
   let conditionalBalances = [];
   let onchain = { rpcUrl: null, balances: [] };
 
   if (sampleTokenIDs.length === 0) {
-    console.log("[Doctor] No BUY trades found on the first page, skipping conditional balance checks.");
+    console.log("[Doctor] 第一页未发现 BUY 交易，跳过条件仓位余额检查。");
   } else {
-    console.log("[Doctor] Checking conditional balances for selected tokens...");
+    console.log("[Doctor] 正在检查所选 token 的条件仓位余额...");
     conditionalBalances = await inspectConditionalBalances(client, sampleTokenIDs);
     for (const entry of conditionalBalances) {
       console.log(
-        `  - token=${entry.tokenID} conditional_balance=${entry.balance} conditional_allowance=${entry.allowance}`
+        `  - token=${entry.tokenID} 条件余额=${entry.balance} 条件授权=${entry.allowance}`
       );
     }
 
-    console.log("[Doctor] Checking on-chain ERC1155 balances for the same tokens...");
+    console.log("[Doctor] 正在检查同一批 token 的链上 ERC1155 余额...");
     onchain = await inspectOnchainConditionalBalances(effectiveAccount, sampleTokenIDs);
     console.log(`[Doctor] Polygon RPC: ${onchain.rpcUrl}`);
     for (const entry of onchain.balances) {
-      console.log(`  - token=${entry.tokenID} onchain_balance=${entry.balance}`);
+      console.log(`  - token=${entry.tokenID} 链上余额=${entry.balance}`);
     }
   }
 
@@ -264,17 +264,17 @@ async function inspectContext(context, signerAddress) {
 }
 
 function printSummary(summaries) {
-  console.log("=== Context Summary ===");
+  console.log("=== 上下文汇总 ===");
   for (const summary of summaries) {
     if (summary.error) {
       console.log(
-        `- ${summary.label}: error=${summary.error}`
+        `- ${summary.label}: 错误=${summary.error}`
       );
       continue;
     }
 
     console.log(
-      `- ${summary.label}: collateral=${summary.collateralBalance}, buy_trades=${summary.buyTradesCount}, nonzero_conditional=${summary.nonZeroConditionalCount}, nonzero_onchain=${summary.nonZeroOnchainCount}`
+      `- ${summary.label}: collateral=${summary.collateralBalance}, 买入交易数=${summary.buyTradesCount}, 条件余额非零数=${summary.nonZeroConditionalCount}, 链上余额非零数=${summary.nonZeroOnchainCount}`
     );
   }
   console.log();
@@ -283,7 +283,7 @@ function printSummary(summaries) {
 function printRecommendation(summaries) {
   const okSummaries = summaries.filter((summary) => !summary.error);
   if (okSummaries.length === 0) {
-    console.log("[Doctor] No successful context checks completed.");
+    console.log("[Doctor] 没有任何上下文检查成功完成。");
     return;
   }
 
@@ -293,26 +293,26 @@ function printRecommendation(summaries) {
 
   if (scoreContext(best) === 0) {
     console.log(
-      "[Doctor] Neither the EOA context nor the configured Polymarket context shows usable collateral or sampled positions."
+      "[Doctor] 无论是 EOA 上下文还是当前配置的 Polymarket 上下文，都没有表现出可用的 collateral 或抽样持仓。"
     );
     console.log(
-      "[Doctor] That strongly suggests you still have the wrong Polymarket account address, or the trades belong to another account entirely."
+      "[Doctor] 这通常说明你配置的 Polymarket 账户地址仍然不对，或者这些交易本来就属于另一个账户。"
     );
     return;
   }
 
   if (!second || scoreContext(best) > scoreContext(second)) {
     console.log(
-      `[Doctor] The strongest match is: ${best.label} -> ${best.effectiveAccount}`
+      `[Doctor] 最匹配的上下文是: ${best.label} -> ${best.effectiveAccount}`
     );
     console.log(
-      `[Doctor] Keep SIGNATURE_TYPE=${best.signatureType}${best.funderAddress ? ` and FUNDER_ADDRESS=${best.funderAddress}` : ""}.`
+      `[Doctor] 建议保留 SIGNATURE_TYPE=${best.signatureType}${best.funderAddress ? `，并设置 FUNDER_ADDRESS=${best.funderAddress}` : ""}。`
     );
     return;
   }
 
   console.log(
-    "[Doctor] Multiple contexts look plausible. Use the one that matches the address shown in Polymarket Portfolio and has non-zero conditional/on-chain balances."
+    "[Doctor] 存在多个看起来都合理的上下文。请选择与 Polymarket Portfolio 页面地址一致、且 conditional/on-chain 余额非零的那个。"
   );
 }
 
@@ -321,8 +321,8 @@ async function main() {
   const signerAddress = wallet.address;
   const contexts = buildContexts();
 
-  console.log("=== Polymarket Account Doctor ===");
-  console.log(`Signer private key address: ${signerAddress}`);
+  console.log("=== Polymarket 账户诊断 ===");
+  console.log(`私钥对应签名地址: ${signerAddress}`);
   console.log();
 
   const summaries = [];
@@ -332,8 +332,8 @@ async function main() {
       const summary = await inspectContext(context, signerAddress);
       summaries.push(summary);
     } catch (err) {
-      console.log(`=== Context: ${context.label} ===`);
-      console.error(`[Doctor] Context check failed: ${err.message || err}`);
+      console.log(`=== 上下文: ${context.label} ===`);
+      console.error(`[Doctor] 上下文检查失败: ${err.message || err}`);
       console.log();
       summaries.push({
         ...context,
@@ -347,10 +347,10 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[DOCTOR:FATAL]", err.message || err);
+  console.error("[DOCTOR:FATAL] 程序异常退出:", err.message || err);
   if (err?.cause?.message) {
     const causeCode = err.cause.code ? ` (${err.cause.code})` : "";
-    console.error(`[DOCTOR:CAUSE] ${err.cause.message}${causeCode}`);
+    console.error(`[DOCTOR:CAUSE] 原因: ${err.cause.message}${causeCode}`);
   }
   process.exit(1);
 });

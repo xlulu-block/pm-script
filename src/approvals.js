@@ -115,11 +115,11 @@ export async function ensureEoaCollateralApprovals(
     for (const entry of before.missing) {
       if ("gasPrice" in feeOverrides) {
         console.log(
-          `[CLOB] Approving ${entry.key} with gasPrice=${formatGwei(feeOverrides.gasPrice)} gwei`
+          `[CLOB] 正在授权 ${entry.key}，gasPrice=${formatGwei(feeOverrides.gasPrice)} gwei`
         );
       } else {
         console.log(
-          `[CLOB] Approving ${entry.key} with maxPriorityFeePerGas=${formatGwei(feeOverrides.maxPriorityFeePerGas)} gwei, maxFeePerGas=${formatGwei(feeOverrides.maxFeePerGas)} gwei`
+          `[CLOB] 正在授权 ${entry.key}，maxPriorityFeePerGas=${formatGwei(feeOverrides.maxPriorityFeePerGas)} gwei，maxFeePerGas=${formatGwei(feeOverrides.maxFeePerGas)} gwei`
         );
       }
 

@@ -38,7 +38,7 @@ function getRetryDelayMs(attempt) {
 }
 
 function createSkipResult(question, reason, skipCategory) {
-  console.log(`[ORDER] SKIPPED "${question}": ${reason}`);
+  console.log(`[ORDER] 已跳过 "${question}": ${reason}`);
   return { success: false, skipped: true, reason, skipCategory };
 }
 
@@ -48,7 +48,7 @@ function evaluateBuyOrderBook(orderBook) {
     if (!config.STRICT_ORDERBOOK_CHECK) {
       return { ok: true, orderOptions: undefined };
     }
-    return { ok: false, reason: "order book missing from batch response", skipCategory: "book-check-failed" };
+    return { ok: false, reason: "批量返回结果中缺少盘口", skipCategory: "book-check-failed" };
   }
 
   const bidLevels = countActiveBookLevels(orderBook?.bids);
@@ -56,7 +56,7 @@ function evaluateBuyOrderBook(orderBook) {
   if (askLevels > 0 && bidLevels === 0) {
     return {
       ok: false,
-      reason: `ask-only order book (asks=${askLevels}, bids=${bidLevels})`,
+      reason: `盘口只有卖盘没有买盘（asks=${askLevels}, bids=${bidLevels}）`,
       skipCategory: "ask-only",
     };
   }
@@ -64,7 +64,7 @@ function evaluateBuyOrderBook(orderBook) {
   if (orderBook.tick_size && String(orderBook.tick_size) !== expectedTickSize) {
     return {
       ok: false,
-      reason: `tick size mismatch (${orderBook.tick_size} != ${expectedTickSize})`,
+      reason: `tick size 不匹配（${orderBook.tick_size} != ${expectedTickSize}）`,
       skipCategory: "tick-size-mismatch",
     };
   }
@@ -73,7 +73,7 @@ function evaluateBuyOrderBook(orderBook) {
   if (!shouldBuy(depth, config)) {
     return {
       ok: false,
-      reason: `depth insufficient (bidAt${depth.buyPriceLevel}=${depth.bidSharesAtBuyPrice}, threshold=${getDepthThreshold(config)})`,
+      reason: `深度不足（bidAt${depth.buyPriceLevel}=${depth.bidSharesAtBuyPrice}, threshold=${getDepthThreshold(config)}）`,
       skipCategory: "depth-insufficient",
     };
   }
@@ -93,7 +93,7 @@ async function debounceQualifiedBuyItems(client, signableItems, resultsByIndex) 
   }
 
   console.log(
-    `[ORDER] Debouncing ${signableItems.length} buy candidate(s) for ${config.BUY_DEPTH_DEBOUNCE_MS}ms`
+    `[ORDER] 对 ${signableItems.length} 个买入候选执行 ${config.BUY_DEPTH_DEBOUNCE_MS}ms 防抖复核`
   );
   await sleep(config.BUY_DEPTH_DEBOUNCE_MS);
 
@@ -101,7 +101,7 @@ async function debounceQualifiedBuyItems(client, signableItems, resultsByIndex) 
   try {
     bookByTokenID = await inspectBatchOrderBooks(client, signableItems);
   } catch (err) {
-    const reason = `buy debounce order book check failed: ${getErrorMessage(err)}`;
+    const reason = `买入防抖阶段盘口检查失败: ${getErrorMessage(err)}`;
     for (const { target, index } of signableItems) {
       resultsByIndex.set(index, createSkipResult(target.question, reason, "depth-debounce-failed"));
     }
@@ -115,7 +115,7 @@ async function debounceQualifiedBuyItems(client, signableItems, resultsByIndex) 
     if (!evaluation.ok) {
       resultsByIndex.set(
         index,
-        createSkipResult(target.question, `buy debounce rejected: ${evaluation.reason}`, "depth-debounce-failed")
+        createSkipResult(target.question, `买入防抖复核未通过: ${evaluation.reason}`, "depth-debounce-failed")
       );
       continue;
     }
@@ -134,25 +134,25 @@ function classifyFailure(question, err) {
   const lowerMsg = msg.toLowerCase();
 
   if (lowerMsg.includes("allowance")) {
-    console.error(`[ORDER] ALLOWANCE ISSUE - stopping all orders`);
+    console.error("[ORDER] 检测到 allowance 问题，停止后续全部下单");
     const guidance =
       config.SIGNATURE_TYPE === 2
-        ? " SIGNATURE_TYPE=2 is only valid for actual Polymarket Gnosis Safe accounts. For a normal wallet private key plus a Polymarket profile/funder address, use SIGNATURE_TYPE=1."
+        ? " SIGNATURE_TYPE=2 只适用于真实的 Polymarket Gnosis Safe 账户。如果你用的是普通钱包私钥 + Polymarket profile/funder 地址，应改为 SIGNATURE_TYPE=1。"
         : "";
     return { success: false, error: `${msg}${guidance}`, stopAll: true };
   }
 
   if (lowerMsg.includes("insufficient") || lowerMsg.includes("not enough balance")) {
-    console.error(`[ORDER] INSUFFICIENT BALANCE - stopping all orders`);
+    console.error("[ORDER] 余额不足，停止后续全部下单");
     return { success: false, error: msg, stopAll: true };
   }
 
   if (isRateLimitMessage(msg)) {
-    console.warn(`[ORDER] RATE LIMITED "${question}": ${msg}`);
+    console.warn(`[ORDER] 请求限流 "${question}": ${msg}`);
     return { success: false, error: msg, retryable: true };
   }
 
-  console.error(`[ORDER] FAILED "${question}": ${msg}`);
+  console.error(`[ORDER] 下单失败 "${question}": ${msg}`);
   return { success: false, error: msg };
 }
 
@@ -167,6 +167,31 @@ function normalizePostOrdersResponse(response, expectedCount) {
     return [response];
   }
   return null;
+}
+
+function classifyOpenOrdersByTokenID(openOrders) {
+  const ordersByTokenID = new Map();
+  const tokenIDs = new Set();
+
+  if (!Array.isArray(openOrders)) {
+    return { ordersByTokenID, tokenIDs };
+  }
+
+  for (const order of openOrders) {
+    const tokenID = order?.asset_id || order?.tokenID || null;
+    if (!tokenID) continue;
+
+    tokenIDs.add(tokenID);
+    const current = ordersByTokenID.get(tokenID) || { buyOrders: [], sellOrders: [] };
+    const side = String(order?.side || "").toUpperCase();
+
+    if (side === "BUY") current.buyOrders.push(order);
+    if (side === "SELL") current.sellOrders.push(order);
+
+    ordersByTokenID.set(tokenID, current);
+  }
+
+  return { ordersByTokenID, tokenIDs };
 }
 
 export async function inspectBatchOrderBooks(client, workItems) {
@@ -199,14 +224,14 @@ async function processOrderBatch(client, workItems, attempt = 1) {
   try {
     bookByTokenID = await inspectBatchOrderBooks(client, workItems);
   } catch (err) {
-    const reason = `order book inspection failed: ${getErrorMessage(err)}`;
+    const reason = `盘口检查失败: ${getErrorMessage(err)}`;
     if (config.STRICT_ORDERBOOK_CHECK) {
       for (const { target, index } of workItems) {
         resultsByIndex.set(index, createSkipResult(target.question, reason, "book-check-failed"));
       }
       return resultsByIndex;
     }
-    console.warn(`[ORDER] Batch order book inspection failed (continuing): ${reason}`);
+    console.warn(`[ORDER] 批量盘口检查失败，但继续执行: ${reason}`);
   }
 
   let signableItems = [];
@@ -276,7 +301,7 @@ async function processOrderBatch(client, workItems, attempt = 1) {
       const normalized = normalizePostOrdersResponse(response, signedItems.length);
 
       if (!normalized || normalized.length !== signedItems.length) {
-        throw new Error("unexpected batch order response shape");
+        throw new Error("批量下单返回结构异常");
       }
 
       for (let i = 0; i < signedItems.length; i++) {
@@ -287,7 +312,7 @@ async function processOrderBatch(client, workItems, attempt = 1) {
         if (itemResponse?.error || itemResponse?.success === false || itemResponse?.errorMsg) {
           const failure = classifyFailure(
             target.question,
-            itemResponse?.error || itemResponse?.errorMsg || "batch post failed"
+            itemResponse?.error || itemResponse?.errorMsg || "批量下单失败"
           );
           if (failure.retryable) {
             retryableItems.push(workItem);
@@ -298,7 +323,7 @@ async function processOrderBatch(client, workItems, attempt = 1) {
         }
 
         console.log(
-          `[ORDER] SUCCESS "${target.question}" tokenID=${target.tokenID.slice(0, 12)}... orderID=${itemResponse?.orderID || "n/a"}`
+          `[ORDER] 下单成功 "${target.question}" tokenID=${target.tokenID.slice(0, 12)}... orderID=${itemResponse?.orderID || "n/a"}`
         );
         resultsByIndex.set(index, { success: true, result: itemResponse });
       }
@@ -321,7 +346,7 @@ async function processOrderBatch(client, workItems, attempt = 1) {
       for (const workItem of retryableItems) {
         resultsByIndex.set(workItem.index, {
           success: false,
-          error: `rate limited after ${config.ORDER_BATCH_MAX_RETRIES} retries`,
+          error: `限流重试 ${config.ORDER_BATCH_MAX_RETRIES} 次后仍失败`,
         });
       }
       return resultsByIndex;
@@ -332,7 +357,7 @@ async function processOrderBatch(client, workItems, attempt = 1) {
       : retryableItems.length;
     const delayMs = getRetryDelayMs(attempt);
     console.warn(
-      `[ORDER] Retrying ${retryableItems.length} rate-limited order(s) in ${delayMs}ms (attempt ${attempt}/${config.ORDER_BATCH_MAX_RETRIES}, next batch size ${nextBatchSize})`
+      `[ORDER] ${retryableItems.length} 笔限流订单将在 ${delayMs}ms 后重试（第 ${attempt}/${config.ORDER_BATCH_MAX_RETRIES} 次，下一批大小 ${nextBatchSize}）`
     );
     await sleep(delayMs);
 
@@ -372,27 +397,27 @@ function parseOptionalBigInt(value) {
 
 function getNonEoaAllowanceHint(signatureType) {
   if (signatureType === 2) {
-    return "SIGNATURE_TYPE=2 only works for actual Polymarket Gnosis Safe accounts. If you are using a normal wallet private key plus a Polymarket profile/funder address, switch to SIGNATURE_TYPE=1 instead.";
+    return "SIGNATURE_TYPE=2 只适用于真实的 Polymarket Gnosis Safe 账户。如果你使用的是普通钱包私钥加 Polymarket profile/funder 地址，请改成 SIGNATURE_TYPE=1。";
   }
 
   if (signatureType === 1) {
-    return "The Polymarket profile/funder address has balance but zero allowance. This usually means the profile wallet was funded, but its Polymarket collateral approvals were never initialized.";
+    return "Polymarket profile/funder 地址有余额但 allowance 为 0。这通常表示 profile 钱包虽然入金了，但还没有初始化 Polymarket collateral 授权。";
   }
 
-  return "The configured account has zero collateral allowance.";
+  return "当前配置账户的 collateral allowance 为 0。";
 }
 
 function logAllowanceSnapshot(prefix, entries) {
   for (const entry of entries) {
     console.log(
-      `${prefix} ${entry.key} allowance=${ethers.utils.formatUnits(entry.allowance, 6)} USDC.e`
+      `${prefix} ${entry.key} 授权额度=${ethers.utils.formatUnits(entry.allowance, 6)} USDC.e`
     );
   }
 }
 
 async function ensureCollateralReady(wallet, signatureType) {
   if (signatureType !== 0) {
-    console.log("[CLOB] Skipping EOA collateral approval check for non-EOA signature type");
+    console.log("[CLOB] 当前不是 EOA 签名类型，跳过 EOA collateral 授权检查");
     return;
   }
 
@@ -402,7 +427,7 @@ async function ensureCollateralReady(wallet, signatureType) {
   );
 
   console.log(
-    `[CLOB] Resolving Polygon RPC and checking on-chain USDC.e approvals (required per order: ${ethers.utils.formatUnits(minimumAllowance, 6)} USDC.e)...`
+    `[CLOB] 正在解析 Polygon RPC，并检查链上 USDC.e 授权（每笔订单至少需要 ${ethers.utils.formatUnits(minimumAllowance, 6)} USDC.e）...`
   );
 
   const status = await ensureEoaCollateralApprovals(
@@ -412,14 +437,14 @@ async function ensureCollateralReady(wallet, signatureType) {
     config.AUTO_APPROVE_COLLATERAL
   );
 
-  console.log(`[CLOB] Using Polygon RPC: ${status.rpcUrl}`);
-  console.log(`[CLOB] On-chain USDC.e balance=${status.balanceFormatted}`);
+  console.log(`[CLOB] 当前使用 Polygon RPC: ${status.rpcUrl}`);
+  console.log(`[CLOB] 链上 USDC.e 余额=${status.balanceFormatted}`);
   logAllowanceSnapshot("[CLOB]", status.allowancesAfter);
 
   if (status.approvals.length > 0) {
     for (const approval of status.approvals) {
       console.log(
-        `[CLOB] Approved ${approval.spender} (${approval.address}) tx=${approval.hash}`
+        `[CLOB] 已完成 ${approval.spender} (${approval.address}) 授权，tx=${approval.hash}`
       );
     }
   }
@@ -427,9 +452,9 @@ async function ensureCollateralReady(wallet, signatureType) {
   if (status.missingAfter.length > 0) {
     const missing = status.missingAfter.map((entry) => entry.key).join(", ");
     const hint = config.AUTO_APPROVE_COLLATERAL
-      ? "Automatic approve did not complete successfully."
-      : "Set AUTO_APPROVE_COLLATERAL=true or approve these spenders manually.";
-    throw new Error(`Missing USDC.e allowance for ${missing}. ${hint}`);
+      ? "自动授权未能成功完成。"
+      : "请设置 AUTO_APPROVE_COLLATERAL=true，或手动授权这些 spender。";
+    throw new Error(`USDC.e 对 ${missing} 的 allowance 缺失。${hint}`);
   }
 }
 
@@ -442,12 +467,12 @@ export async function initClobClient(options = {}) {
     : (config.EFFECTIVE_FUNDER_ADDRESS || undefined);
   const wallet = new ethers.Wallet(config.PRIVATE_KEY);
   const effectiveMaker = funderAddress || wallet.address;
-  console.log(`[CLOB] Wallet address: ${wallet.address}`);
+  console.log(`[CLOB] 钱包地址: ${wallet.address}`);
   console.log(
-    `[CLOB] Signature type: ${formatSignatureType(signatureType)} (${signatureType})`
+    `[CLOB] 签名类型: ${formatSignatureType(signatureType)} (${signatureType})`
   );
   console.log(
-    `[CLOB] Effective maker/funder: ${effectiveMaker}`
+    `[CLOB] 生效的 maker/funder: ${effectiveMaker}`
   );
 
   // Step 1: unauthenticated client to derive API creds
@@ -467,7 +492,7 @@ export async function initClobClient(options = {}) {
   );
 
   // Step 2: derive API credentials
-  console.log("[CLOB] Deriving API credentials...");
+  console.log("[CLOB] 正在生成 API 凭证...");
   const creds = await tempClient.createOrDeriveApiKey();
 
   // Step 3: authenticated client
@@ -491,16 +516,16 @@ export async function initClobClient(options = {}) {
   if (ensureCollateral) {
     await ensureCollateralReady(wallet, signatureType);
   } else {
-    console.log("[CLOB] Skipping collateral approval check by request");
+    console.log("[CLOB] 按要求跳过 collateral 授权检查");
   }
 
   // Step 5: refresh CLOB-side balance/allowance cache for diagnostics
   if (refreshCollateralCache) {
-    console.log("[CLOB] Refreshing CLOB balance/allowance cache...");
+    console.log("[CLOB] 正在刷新 CLOB 余额/授权缓存...");
     await client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
     const collateral = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
     console.log(
-      `[CLOB] CLOB collateral cache balance=${collateral.balance ?? "n/a"}, allowance=${collateral.allowance ?? "n/a"}`
+      `[CLOB] CLOB collateral 缓存 balance=${collateral.balance ?? "n/a"}, allowance=${collateral.allowance ?? "n/a"}`
     );
 
     const collateralBalance = parseOptionalBigInt(collateral.balance);
@@ -513,31 +538,34 @@ export async function initClobClient(options = {}) {
       collateralAllowance === 0n
     ) {
       throw new Error(
-        `CLOB collateral allowance is zero for funder ${effectiveMaker} under ${formatSignatureType(signatureType)}. ${getNonEoaAllowanceHint(signatureType)}`
+        `${formatSignatureType(signatureType)} 模式下，funder ${effectiveMaker} 的 CLOB collateral allowance 为 0。${getNonEoaAllowanceHint(signatureType)}`
       );
     }
   }
 
-  console.log("[CLOB] Client initialized successfully");
+  console.log("[CLOB] 客户端初始化成功");
   return client;
 }
 
-export async function getExistingOrderTokenIDs(client) {
+export async function getAccountOpenOrders(client) {
   try {
     const openOrders = await client.getOpenOrders();
-    const tokenIDs = new Set();
-    if (Array.isArray(openOrders)) {
-      for (const order of openOrders) {
-        if (order.asset_id) tokenIDs.add(order.asset_id);
-        if (order.tokenID) tokenIDs.add(order.tokenID);
-      }
-    }
-    console.log(`[CLOB] Found ${tokenIDs.size} existing open order token IDs`);
-    return tokenIDs;
+    const { ordersByTokenID, tokenIDs } = classifyOpenOrdersByTokenID(openOrders);
+    console.log(`[CLOB] 找到 ${tokenIDs.size} 个已有挂单的 token ID`);
+    return { openOrders, ordersByTokenID, tokenIDs };
   } catch (err) {
-    console.warn(`[CLOB] Failed to fetch open orders (continuing without dedup): ${err.message}`);
-    return new Set();
+    console.warn(`[CLOB] 获取挂单失败（将继续执行，但不做去重）: ${err.message}`);
+    return { openOrders: [], ordersByTokenID: new Map(), tokenIDs: new Set() };
   }
+}
+
+export function getOpenOrdersForTokenFromSnapshot(snapshot, tokenID) {
+  return snapshot?.ordersByTokenID?.get(tokenID) || { buyOrders: [], sellOrders: [] };
+}
+
+export async function getExistingOrderTokenIDs(client) {
+  const snapshot = await getAccountOpenOrders(client);
+  return snapshot.tokenIDs;
 }
 
 export async function getBoughtTokenIDs(client) {
@@ -553,10 +581,10 @@ export async function getBoughtTokenIDs(client) {
       }
     }
 
-    console.log(`[CLOB] Found ${tokenIDs.size} bought token IDs from trade history`);
+    console.log(`[CLOB] 从交易历史中找到 ${tokenIDs.size} 个买入过的 token ID`);
     return tokenIDs;
   } catch (err) {
-    console.warn(`[CLOB] Failed to fetch trade history (continuing without bought dedup): ${err.message}`);
+    console.warn(`[CLOB] 获取交易历史失败（将继续执行，但不做已买入去重）: ${err.message}`);
     return new Set();
   }
 }
@@ -565,7 +593,7 @@ export async function placeOrdersBatch(client, targets) {
   const workItems = targets.map((target, index) => ({ target, index }));
   const resultsByIndex = await processOrderBatch(client, workItems);
   return targets.map((_, index) => {
-    return resultsByIndex.get(index) || { success: false, error: "unknown batch order result" };
+    return resultsByIndex.get(index) || { success: false, error: "未知的批量下单结果" };
   });
 }
 

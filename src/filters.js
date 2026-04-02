@@ -295,7 +295,7 @@ export function filterMarkets(markets) {
     .map(([key, count]) => `${key}: ${count}`)
     .join(", ");
   console.log(
-    `[Filter] Profile=${config.FILTER_PROFILE}, ${summary}, Excluded: ${excludedSummary}, Unique targets: ${allTargets.length}`
+    `[Filter] 当前过滤配置=${config.FILTER_PROFILE}，命中统计: ${summary}，排除统计: ${excludedSummary}，唯一目标数: ${allTargets.length}`
   );
 
   return { categoryCounts: counts, excludedCounts, allTargets };

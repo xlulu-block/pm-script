@@ -5,6 +5,9 @@ import {
   transitionToken,
   saveState,
   getToken,
+  pruneTerminalTokens,
+  upsertToken,
+  getActiveTrackedTokens,
 } from "./state.js";
 import {
   analyzeBidDepth,
@@ -18,23 +21,192 @@ import {
 import {
   cancelOrdersForToken,
   placeSellOrder,
-  getOpenOrdersForToken,
   getFilledShares,
 } from "./orders.js";
-import { inspectBatchOrderBooks } from "./clob.js";
+import {
+  getAccountOpenOrders,
+  getBoughtTokenIDs,
+  getOpenOrdersForTokenFromSnapshot,
+  inspectBatchOrderBooks,
+} from "./clob.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const BALANCE_DISCOVERY_CONCURRENCY = 8;
+const SELL_PROGRESS_STEP = 25;
+
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(runners);
+  return results;
+}
+
+function getSellScanConcurrency() {
+  return Math.max(1, Number(config.SELL_SCAN_CONCURRENCY || BALANCE_DISCOVERY_CONCURRENCY));
+}
+
+function createProgressReporter(label, total, step = SELL_PROGRESS_STEP) {
+  if (total <= 0) return () => {};
+
+  const effectiveStep = total <= step ? total : step;
+  let completed = 0;
+
+  return () => {
+    completed += 1;
+    if (completed === 1 || completed === total || completed % effectiveStep === 0) {
+      console.log(`[SELL] ${label}: ${completed}/${total}`);
+    }
+  };
+}
+
+async function withTokenLock(tokenID, worker) {
+  const lock = acquireTokenLock(tokenID);
+  await lock.wait;
+  try {
+    return await worker();
+  } finally {
+    lock.release();
+  }
+}
+
+async function runTokenStage(items, label, worker) {
+  if (items.length === 0) return;
+
+  const reportProgress = createProgressReporter(label, items.length);
+  await mapWithConcurrency(items, getSellScanConcurrency(), async (item, index) => {
+    try {
+      await worker(item, index);
+    } finally {
+      reportProgress();
+    }
+  });
+}
+
+function inferTrackedState(balance, orderSnapshot) {
+  if (orderSnapshot.sellOrders.length > 0) {
+    const sellOrderInfo = inspectSellOrders(orderSnapshot.sellOrders);
+    if (sellOrderInfo.hasSellAtBuyPrice) return States.SELL_OPEN_001;
+    return States.SELL_OPEN_002;
+  }
+
+  if (orderSnapshot.buyOrders.length > 0) {
+    return balance > 0 ? States.PARTIAL_FILL : States.BUY_OPEN;
+  }
+
+  if (balance > 0) {
+    return States.FILLED_WAIT_SELL;
+  }
+
+  return null;
+}
+
+function inferTrackedSellPrice(orderSnapshot) {
+  const sellOrderInfo = inspectSellOrders(orderSnapshot.sellOrders);
+  if (sellOrderInfo.hasSellAtBuyPrice) return getBuyPriceLevel(config);
+  if (sellOrderInfo.hasSellAtTargetPrice) return getTargetSellPrice(config);
+  return normalizeSellOrderPrice(orderSnapshot.sellOrders[0] || null);
+}
+
+async function syncStateWithAccount(client, state, openOrderSnapshot) {
+  const activeTrackedTokens = getActiveTrackedTokens(state);
+  const candidateTokenIDs = new Set([
+    ...activeTrackedTokens.map((token) => token.tokenID),
+    ...openOrderSnapshot.tokenIDs,
+  ]);
+
+  if (candidateTokenIDs.size === 0) {
+    console.log("[SELL] 当前没有活跃追踪 token 或挂单，正在从 BUY 交易历史发现候选持仓...");
+    const boughtTokenIDs = await getBoughtTokenIDs(client);
+    for (const tokenID of boughtTokenIDs) {
+      candidateTokenIDs.add(tokenID);
+    }
+  }
+
+  if (candidateTokenIDs.size === 0) {
+    return;
+  }
+
+  const tokenIDs = [...candidateTokenIDs];
+  console.log(`[SELL] 正在同步账户库存，候选 token 数量: ${tokenIDs.length}...`);
+  const reportProgress = createProgressReporter("库存同步进度", tokenIDs.length);
+
+  const balances = await mapWithConcurrency(
+    tokenIDs,
+    getSellScanConcurrency(),
+    async (tokenID) => {
+      try {
+        return {
+          tokenID,
+          balance: await getFilledShares(client, tokenID),
+        };
+      } finally {
+        reportProgress();
+      }
+    }
+  );
+
+  let addedCount = 0;
+
+  for (const { tokenID, balance } of balances) {
+    const orderSnapshot = getOpenOrdersForTokenFromSnapshot(openOrderSnapshot, tokenID);
+    const nextState = inferTrackedState(balance, orderSnapshot);
+    const existing = getToken(state, tokenID);
+
+    if (!nextState) {
+      continue;
+    }
+
+    const fields = {
+      state: nextState,
+      buyOrderId: orderSnapshot.buyOrders[0]?.id || null,
+      sellOrderId: orderSnapshot.sellOrders[0]?.id || null,
+      sellPrice: inferTrackedSellPrice(orderSnapshot),
+      filledShares: balance,
+      lastError: null,
+    };
+
+    if (existing) {
+      Object.assign(existing, fields);
+      continue;
+    }
+
+    upsertToken(state, tokenID, fields);
+    addedCount++;
+  }
+
+  if (addedCount > 0) {
+    console.log(`[SELL] 已从账户快照补充 ${addedCount} 个在线 token`);
+  }
+}
 
 export async function runSellScan(client, state) {
-  console.log("[SELL] Starting sell scan...");
+  console.log("[SELL] 开始卖出扫描...");
 
-  await checkBuyOrderStatuses(client, state);
+  const initialOpenOrderSnapshot = await getAccountOpenOrders(client);
+  await syncStateWithAccount(client, state, initialOpenOrderSnapshot);
+
   await recoverDustBalances(client, state);
-  await processSellableTokens(client, state);
-  await checkSellOrderStatuses(client, state);
+  await processSellableTokens(client, state, initialOpenOrderSnapshot);
+
+  const finalOpenOrderSnapshot = await getAccountOpenOrders(client);
+  await checkSellOrderStatuses(client, state, finalOpenOrderSnapshot);
+  await checkBuyOrderStatuses(client, state, finalOpenOrderSnapshot);
+
+  const prunedCount = pruneTerminalTokens(state);
+  if (prunedCount > 0) {
+    console.log(`[SELL] 已从本地状态中清理 ${prunedCount} 个终态 token`);
+  }
 
   await saveState(config.STATE_FILE, state);
-  console.log("[SELL] Sell scan complete.");
+  console.log("[SELL] 卖出扫描完成。");
 }
 
 function normalizeSellOrderPrice(order) {
@@ -117,11 +289,11 @@ async function replaceTrackedSellOrder(
   fromPrice,
   toPrice
 ) {
-  console.log(`[SELL] Repricing ${token.question} from ${fromPrice} to ${toPrice}`);
+  console.log(`[SELL] 正在调整 ${token.question} 的卖价: ${fromPrice} -> ${toPrice}`);
 
   const cancelResult = await cancelOrdersForToken(client, token.tokenID, "SELL");
   if (!cancelResult.success) {
-    console.warn(`[SELL] Failed to cancel sell order for ${token.question} during repricing`);
+    console.warn(`[SELL] 调价时取消 ${token.question} 的卖单失败`);
     return false;
   }
 
@@ -157,12 +329,12 @@ async function forceClearMarket(client, state, token, orderBook, balance, buyOrd
   const { hasSellAtBuyPrice, firstSellAtBuyPrice } = inspectSellOrders(sellOrders);
   const existingSellSize = firstSellAtBuyPrice ? getRemainingOrderSize(firstSellAtBuyPrice) : null;
 
-  console.log(`[SELL] ${reason} for ${token.question}, clearing market at ${buyPrice}`);
+  console.log(`[SELL] ${token.question} 触发清仓条件：${reason}，按 ${buyPrice} 清仓`);
 
   if (buyOrders.length > 0) {
     const buyCancelResult = await cancelOrdersForToken(client, token.tokenID, "BUY");
     if (!buyCancelResult.success) {
-      console.warn(`[SELL] Failed to cancel buy orders for ${token.question} during clear-out`);
+      console.warn(`[SELL] 清仓时取消 ${token.question} 的买单失败`);
       return;
     }
   }
@@ -206,7 +378,7 @@ async function forceClearMarket(client, state, token, orderBook, balance, buyOrd
   if (sellOrders.length > 0) {
     const cancelResult = await cancelOrdersForToken(client, token.tokenID, "SELL");
     if (!cancelResult.success) {
-      console.warn(`[SELL] Failed to cancel sell order for ${token.question} during clear-out`);
+      console.warn(`[SELL] 清仓时取消 ${token.question} 的卖单失败`);
       return;
     }
   }
@@ -227,12 +399,12 @@ async function fetchOrderBookForToken(client, tokenID) {
 
 function getForceExitReason(depth, threshold) {
   if (!depth.hasAnyBids) {
-    return "No bids in order book";
+    return "盘口中没有买单";
   }
   if (depth.bidSharesAtBuyPrice <= 0) {
-    return `No ${depth.buyPriceLevel} bids in order book`;
+    return `盘口中没有 ${depth.buyPriceLevel} 档买单`;
   }
-  return `Bid depth at ${depth.buyPriceLevel} (${depth.bidSharesAtBuyPrice}) below threshold ${threshold}`;
+  return `${depth.buyPriceLevel} 档买盘深度 (${depth.bidSharesAtBuyPrice}) 低于阈值 ${threshold}`;
 }
 
 async function confirmSellDecision(client, token, orderBook) {
@@ -250,12 +422,12 @@ async function confirmSellDecision(client, token, orderBook) {
     };
   }
 
-  console.log(`[SELL] Debouncing sell decision for ${token.question} by ${config.SELL_DEPTH_DEBOUNCE_MS}ms`);
+  console.log(`[SELL] 对 ${token.question} 的卖出决策执行 ${config.SELL_DEPTH_DEBOUNCE_MS}ms 防抖复核`);
   await sleep(config.SELL_DEPTH_DEBOUNCE_MS);
 
   const refreshedBook = await fetchOrderBookForToken(client, token.tokenID);
   if (!refreshedBook) {
-    return { confirmed: false, reason: "order book unavailable during debounce" };
+    return { confirmed: false, reason: "防抖复核期间无法获取盘口" };
   }
 
   const refreshedDepth = analyzeBidDepth(refreshedBook, config);
@@ -267,7 +439,7 @@ async function confirmSellDecision(client, token, orderBook) {
   ) {
     return {
       confirmed: false,
-      reason: `unstable sell signal (${initialTargetPrice} -> ${refreshedTargetPrice})`,
+      reason: `卖出信号不稳定（${initialTargetPrice} -> ${refreshedTargetPrice}）`,
       orderBook: refreshedBook,
       depth: refreshedDepth,
     };
@@ -282,79 +454,77 @@ async function confirmSellDecision(client, token, orderBook) {
   };
 }
 
-async function checkBuyOrderStatuses(client, state) {
+async function checkBuyOrderStatuses(client, state, openOrderSnapshot) {
   const buyTokens = getTokensByState(state, States.BUY_OPEN, States.PARTIAL_FILL);
   if (buyTokens.length === 0) return;
 
-  console.log(`[SELL] Checking ${buyTokens.length} buy order(s)...`);
+  console.log(`[SELL] 正在检查 ${buyTokens.length} 笔买单状态...`);
 
-  for (const token of buyTokens) {
-    const lock = acquireTokenLock(token.tokenID);
-    await lock.wait;
-    try {
-      await checkSingleBuyOrder(client, state, token);
-    } catch (err) {
-      console.error(`[SELL] Error checking buy order for ${token.tokenID.slice(0, 12)}...: ${err.message}`);
+  await runTokenStage(buyTokens, "买单状态进度", async (token) => {
+    await withTokenLock(token.tokenID, async () => {
       try {
-        await transitionToken(state, token.tokenID, States.ERROR_PAUSE, { lastError: err.message });
-      } catch {}
-    } finally {
-      lock.release();
-    }
-  }
+        await checkSingleBuyOrder(client, state, token, openOrderSnapshot);
+      } catch (err) {
+        console.error(`[SELL] 检查买单 ${token.tokenID.slice(0, 12)}... 时出错: ${err.message}`);
+        try {
+          await transitionToken(state, token.tokenID, States.ERROR_PAUSE, { lastError: err.message });
+        } catch {}
+      }
+    });
+  });
 }
 
 async function recoverDustBalances(client, state) {
   const dustTokens = getTokensByState(state, States.DUST);
   if (dustTokens.length === 0) return;
 
-  for (const token of dustTokens) {
-    const lock = acquireTokenLock(token.tokenID);
-    await lock.wait;
-    try {
-      const balance = await getFilledShares(client, token.tokenID);
-      if (balance <= 0) {
-        continue;
-      }
+  console.log(`[SELL] 正在检查 ${dustTokens.length} 个 dust token 是否恢复余额...`);
 
-      console.log(`[SELL] Recovering dust state for ${token.question}, balance=${balance}`);
-      await transitionToken(state, token.tokenID, States.FILLED_WAIT_SELL, {
-        filledShares: balance,
-        buyOrderId: null,
-        sellOrderId: null,
-        sellPrice: null,
-      });
-    } catch (err) {
-      console.error(`[SELL] Error recovering dust token ${token.tokenID.slice(0, 12)}...: ${err.message}`);
+  await runTokenStage(dustTokens, "Dust 恢复进度", async (token) => {
+    await withTokenLock(token.tokenID, async () => {
       try {
-        await transitionToken(state, token.tokenID, States.ERROR_PAUSE, { lastError: err.message });
-      } catch {}
-    } finally {
-      lock.release();
-    }
-  }
+        const balance = await getFilledShares(client, token.tokenID);
+        if (balance <= 0) {
+          return;
+        }
+
+        console.log(`[SELL] ${token.question} 检测到余额恢复，正在从 dust 恢复，balance=${balance}`);
+        await transitionToken(state, token.tokenID, States.FILLED_WAIT_SELL, {
+          filledShares: balance,
+          buyOrderId: null,
+          sellOrderId: null,
+          sellPrice: null,
+        });
+      } catch (err) {
+        console.error(`[SELL] 恢复 dust token ${token.tokenID.slice(0, 12)}... 时出错: ${err.message}`);
+        try {
+          await transitionToken(state, token.tokenID, States.ERROR_PAUSE, { lastError: err.message });
+        } catch {}
+      }
+    });
+  });
 }
 
-async function checkSingleBuyOrder(client, state, token) {
-  const { buyOrders } = await getOpenOrdersForToken(client, token.tokenID);
+async function checkSingleBuyOrder(client, state, token, openOrderSnapshot) {
+  const { buyOrders } = getOpenOrdersForTokenFromSnapshot(openOrderSnapshot, token.tokenID);
   const balance = await getFilledShares(client, token.tokenID);
 
   if (buyOrders.length === 0) {
     if (balance > 0) {
-      console.log(`[SELL] Buy order completed for ${token.question}, balance=${balance}`);
+      console.log(`[SELL] ${token.question} 的买单已完成，balance=${balance}`);
       await transitionToken(state, token.tokenID, States.FILLED_WAIT_SELL, {
         filledShares: balance,
         buyOrderId: null,
       });
     } else {
-      console.log(`[SELL] Buy order closed without fill for ${token.question}`);
+      console.log(`[SELL] ${token.question} 的买单已关闭且未成交`);
       await transitionToken(state, token.tokenID, States.BUY_CLOSED_NO_FILL, { buyOrderId: null });
     }
     return;
   }
 
   if (balance > 0 && token.state === States.BUY_OPEN) {
-    console.log(`[SELL] Partial fill detected for ${token.question}, balance=${balance}`);
+    console.log(`[SELL] ${token.question} 检测到部分成交，balance=${balance}`);
     await transitionToken(state, token.tokenID, States.PARTIAL_FILL, { filledShares: balance });
   } else if (balance > 0) {
     const trackedToken = getToken(state, token.tokenID);
@@ -362,7 +532,7 @@ async function checkSingleBuyOrder(client, state, token) {
   }
 }
 
-async function processSellableTokens(client, state) {
+async function processSellableTokens(client, state, openOrderSnapshot) {
   const sellTokens = getTokensByState(
     state,
     States.BUY_OPEN,
@@ -373,48 +543,92 @@ async function processSellableTokens(client, state) {
   );
   if (sellTokens.length === 0) return;
 
-  console.log(`[SELL] Processing ${sellTokens.length} token(s) for sell decisions...`);
+  console.log(`[SELL] 正在处理 ${sellTokens.length} 个 token 的卖出决策...`);
 
-  for (const token of sellTokens) {
-    const lock = acquireTokenLock(token.tokenID);
-    await lock.wait;
-    try {
-      await processSingleSellToken(client, state, token);
-    } catch (err) {
-      console.error(`[SELL] Error processing sell for ${token.tokenID.slice(0, 12)}...: ${err.message}`);
+  await runTokenStage(sellTokens, "卖出决策进度", async (token) => {
+    await withTokenLock(token.tokenID, async () => {
       try {
-        await transitionToken(state, token.tokenID, States.ERROR_PAUSE, { lastError: err.message });
-      } catch {}
-    } finally {
-      lock.release();
-    }
-  }
+        await processSingleSellToken(client, state, token, openOrderSnapshot);
+      } catch (err) {
+        console.error(`[SELL] 处理卖出 ${token.tokenID.slice(0, 12)}... 时出错: ${err.message}`);
+        try {
+          await transitionToken(state, token.tokenID, States.ERROR_PAUSE, { lastError: err.message });
+        } catch {}
+      }
+    });
+  });
 }
 
-async function processSingleSellToken(client, state, token) {
+async function processSingleSellToken(client, state, token, openOrderSnapshot) {
   const balance = await getFilledShares(client, token.tokenID);
-  const trackedToken = getToken(state, token.tokenID);
+  let trackedToken = getToken(state, token.tokenID);
   if (trackedToken) trackedToken.filledShares = balance;
 
-  const { buyOrders, sellOrders } = await getOpenOrdersForToken(client, token.tokenID);
+  const { buyOrders, sellOrders } = getOpenOrdersForTokenFromSnapshot(openOrderSnapshot, token.tokenID);
   const sellOrderInfo = inspectSellOrders(sellOrders);
 
-  if (buyOrders.length === 0 && sellOrders.length === 0) {
-    if (balance <= 0) {
-      return;
+  // Open BUY orders with zero filled balance are not actionable sell inventory.
+  if (buyOrders.length > 0 && balance <= 0 && token.state === States.BUY_OPEN) {
+    return;
+  }
+
+  if (
+    buyOrders.length === 0 &&
+    balance > 0 &&
+    (token.state === States.BUY_OPEN || token.state === States.PARTIAL_FILL)
+  ) {
+    console.log(`[SELL] ${token.question} 当前 balance=${balance} 且已无买单，提升为 filled_wait_sell`);
+    await transitionToken(state, token.tokenID, States.FILLED_WAIT_SELL, {
+      filledShares: balance,
+      buyOrderId: null,
+    });
+    token = getToken(state, token.tokenID) || token;
+    trackedToken = getToken(state, token.tokenID) || trackedToken;
+  }
+
+  if (sellOrders.length > 0 && balance <= 0) {
+    console.log(`[SELL] ${token.question || token.tokenID} 已无余额，正在取消陈旧卖单`);
+    const cancelResult = await cancelOrdersForToken(client, token.tokenID, "SELL");
+    if (cancelResult.success) {
+      const terminalState =
+        token.state === States.SELL_OPEN_001 || token.state === States.SELL_OPEN_002
+          ? States.SOLD
+          : States.DUST;
+      await transitionToken(state, token.tokenID, terminalState, {
+        filledShares: 0,
+        sellOrderId: null,
+        sellPrice: null,
+      });
     }
+    return;
+  }
+
+  if (buyOrders.length === 0 && sellOrders.length === 0 && balance <= 0) {
+    const terminalState =
+      token.state === States.BUY_OPEN
+        ? States.BUY_CLOSED_NO_FILL
+        : token.state === States.SELL_OPEN_001 || token.state === States.SELL_OPEN_002
+          ? States.SOLD
+          : States.DUST;
+    await transitionToken(state, token.tokenID, terminalState, {
+      filledShares: 0,
+      buyOrderId: null,
+      sellOrderId: null,
+      sellPrice: null,
+    });
+    return;
   }
 
   let orderBook = null;
   try {
     orderBook = await fetchOrderBookForToken(client, token.tokenID);
   } catch (err) {
-    console.warn(`[SELL] Order book fetch failed for ${token.tokenID.slice(0, 12)}...: ${err.message}`);
+    console.warn(`[SELL] 获取 ${token.tokenID.slice(0, 12)}... 盘口失败: ${err.message}`);
     return;
   }
 
   if (!orderBook) {
-    console.warn(`[SELL] No order book for ${token.tokenID.slice(0, 12)}...`);
+    console.warn(`[SELL] ${token.tokenID.slice(0, 12)}... 没有可用盘口`);
     return;
   }
 
@@ -423,7 +637,7 @@ async function processSingleSellToken(client, state, token) {
     if (trackedToken && decision.depth) {
       trackedToken.lastSeenBidSharesAtOrderPrice = decision.depth.bidSharesAtBuyPrice;
     }
-    console.log(`[SELL] Skipping ${token.question} this round: ${decision.reason}`);
+    console.log(`[SELL] 本轮跳过 ${token.question}: ${decision.reason}`);
     return;
   }
 
@@ -482,7 +696,7 @@ async function processSingleSellToken(client, state, token) {
       } else {
         if (targetSellPrice !== buyPrice && replaceCooldownRemainingMs > 0) {
           console.log(
-            `[SELL] ${token.question} recovered but repricing is cooling down for ${replaceCooldownRemainingMs}ms`
+            `[SELL] ${token.question} 深度已恢复，但调价冷却中，还需等待 ${replaceCooldownRemainingMs}ms`
           );
         }
 
@@ -507,38 +721,38 @@ async function processSingleSellToken(client, state, token) {
   }
 }
 
-async function checkSellOrderStatuses(client, state) {
+async function checkSellOrderStatuses(client, state, openOrderSnapshot) {
   const sellTokens = getTokensByState(state, States.SELL_OPEN_002, States.SELL_OPEN_001);
   if (sellTokens.length === 0) return;
 
-  for (const token of sellTokens) {
-    const lock = acquireTokenLock(token.tokenID);
-    await lock.wait;
-    try {
-      const balance = await getFilledShares(client, token.tokenID);
-      const trackedToken = getToken(state, token.tokenID);
-      if (trackedToken) trackedToken.filledShares = balance;
+  console.log(`[SELL] 正在检查 ${sellTokens.length} 笔 SELL 挂单状态...`);
 
-      const { sellOrders } = await getOpenOrdersForToken(client, token.tokenID);
+  await runTokenStage(sellTokens, "卖单状态进度", async (token) => {
+    await withTokenLock(token.tokenID, async () => {
+      try {
+        const balance = await getFilledShares(client, token.tokenID);
+        const trackedToken = getToken(state, token.tokenID);
+        if (trackedToken) trackedToken.filledShares = balance;
 
-      if (sellOrders.length === 0 && balance <= 0) {
-        console.log(`[SELL] Fully sold ${token.question}`);
-        await transitionToken(state, token.tokenID, States.SOLD, {
-          filledShares: 0,
-          sellOrderId: null,
-          sellPrice: null,
-        });
-      } else if (sellOrders.length === 0 && balance > 0) {
-        console.log(`[SELL] Sell order gone but balance remains for ${token.question}, balance=${balance}`);
-        await transitionToken(state, token.tokenID, States.FILLED_WAIT_SELL, {
-          sellOrderId: null,
-          filledShares: balance,
-        });
+        const { sellOrders } = getOpenOrdersForTokenFromSnapshot(openOrderSnapshot, token.tokenID);
+
+        if (sellOrders.length === 0 && balance <= 0) {
+          console.log(`[SELL] ${token.question} 已全部卖出`);
+          await transitionToken(state, token.tokenID, States.SOLD, {
+            filledShares: 0,
+            sellOrderId: null,
+            sellPrice: null,
+          });
+        } else if (sellOrders.length === 0 && balance > 0) {
+          console.log(`[SELL] ${token.question} 的卖单已消失，但余额仍在，balance=${balance}`);
+          await transitionToken(state, token.tokenID, States.FILLED_WAIT_SELL, {
+            sellOrderId: null,
+            filledShares: balance,
+          });
+        }
+      } catch (err) {
+        console.error(`[SELL] 检查卖单状态 ${token.tokenID.slice(0, 12)}... 时出错: ${err.message}`);
       }
-    } catch (err) {
-      console.error(`[SELL] Error checking sell status for ${token.tokenID.slice(0, 12)}...: ${err.message}`);
-    } finally {
-      lock.release();
-    }
-  }
+    });
+  });
 }

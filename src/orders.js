@@ -9,11 +9,11 @@ function getErrorMessage(err) {
 export async function cancelOrderById(client, orderID) {
   try {
     await client.cancelOrder({ orderID });
-    console.log(`[ORDER] Cancelled order ${orderID}`);
+    console.log(`[ORDER] 已取消订单 ${orderID}`);
     return { success: true };
   } catch (err) {
     const msg = getErrorMessage(err);
-    console.error(`[ORDER] Failed to cancel order ${orderID}: ${msg}`);
+    console.error(`[ORDER] 取消订单 ${orderID} 失败: ${msg}`);
     return { success: false, error: msg };
   }
 }
@@ -33,12 +33,12 @@ export async function cancelOrdersForToken(client, tokenID, side = null) {
     }
     await client.cancelOrders(orderIDs);
     const sideLabel = side ? ` ${String(side).toUpperCase()}` : "";
-    console.log(`[ORDER] Cancelled ${orderIDs.length}${sideLabel} order(s) for token ${tokenID.slice(0, 12)}...`);
+    console.log(`[ORDER] 已取消 token ${tokenID.slice(0, 12)}... 的 ${orderIDs.length}${sideLabel} 笔订单`);
     return { success: true, cancelledCount: orderIDs.length };
   } catch (err) {
     const msg = getErrorMessage(err);
     const sideLabel = side ? ` ${String(side).toUpperCase()}` : "";
-    console.error(`[ORDER] Failed to cancel${sideLabel} orders for token ${tokenID.slice(0, 12)}...: ${msg}`);
+    console.error(`[ORDER] 取消 token ${tokenID.slice(0, 12)}... 的${sideLabel}订单失败: ${msg}`);
     return { success: false, cancelledCount: 0, error: msg };
   }
 }
@@ -50,11 +50,11 @@ export async function placeSellOrder(client, tokenID, price, size, orderBookOpti
     const response = await client.postOrder(order, OrderType.GTC);
 
     const orderID = response?.orderID || response?.id || null;
-    console.log(`[ORDER] SELL placed token=${tokenID.slice(0, 12)}... price=${price} size=${size} orderID=${orderID || "n/a"}`);
+    console.log(`[ORDER] SELL 下单成功 token=${tokenID.slice(0, 12)}... price=${price} size=${size} orderID=${orderID || "n/a"}`);
     return { success: true, orderID };
   } catch (err) {
     const msg = getErrorMessage(err);
-    console.error(`[ORDER] SELL failed token=${tokenID.slice(0, 12)}... price=${price}: ${msg}`);
+    console.error(`[ORDER] SELL 下单失败 token=${tokenID.slice(0, 12)}... price=${price}: ${msg}`);
     return { success: false, error: msg };
   }
 }
@@ -72,7 +72,7 @@ export async function getOpenOrdersForToken(client, tokenID) {
     }
     return { buyOrders, sellOrders };
   } catch (err) {
-    console.warn(`[ORDER] Failed to fetch open orders for token ${tokenID.slice(0, 12)}...: ${getErrorMessage(err)}`);
+    console.warn(`[ORDER] 获取 token ${tokenID.slice(0, 12)}... 的挂单失败: ${getErrorMessage(err)}`);
     return { buyOrders: [], sellOrders: [] };
   }
 }
@@ -85,7 +85,7 @@ export async function getFilledShares(client, tokenID) {
     });
     return Number(result?.balance || 0);
   } catch (err) {
-    console.warn(`[ORDER] Failed to get balance for token ${tokenID.slice(0, 12)}...: ${getErrorMessage(err)}`);
+    console.warn(`[ORDER] 获取 token ${tokenID.slice(0, 12)}... 的余额失败: ${getErrorMessage(err)}`);
     return 0;
   }
 }

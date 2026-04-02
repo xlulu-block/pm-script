@@ -24,7 +24,7 @@ function parseNumberEnv(key, defaultVal, parser = parseFloat) {
   const raw = envOrDefault(key, defaultVal);
   const value = parser(raw);
   if (!Number.isFinite(value)) {
-    console.error(`[Config] ${key} must be a valid number`);
+    console.error(`[Config] ${key} 必须是有效数字`);
     process.exit(1);
   }
   return value;
@@ -35,41 +35,41 @@ const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.en
 
 // Auto-configure proxy for users behind GFW or corporate firewalls
 if (DISABLE_PROXY) {
-  console.log("[Config] Proxy disabled via DISABLE_PROXY=true");
+  console.log("[Config] 已通过 DISABLE_PROXY=true 禁用代理");
 } else if (proxyUrl) {
-  console.log(`[Config] Using proxy: ${proxyUrl}`);
+  console.log(`[Config] 当前使用代理: ${proxyUrl}`);
   setGlobalDispatcher(new ProxyAgent(proxyUrl));
   https.globalAgent = new HttpsProxyAgent(proxyUrl);
 }
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 if (!DRY_RUN && !PRIVATE_KEY) {
-  console.error("[Config] PRIVATE_KEY is required in .env");
+  console.error("[Config] 非 DRY_RUN 模式下，.env 必须提供 PRIVATE_KEY");
   process.exit(1);
 }
 if (PRIVATE_KEY && !/^0x[0-9a-fA-F]{64}$/.test(PRIVATE_KEY)) {
-  console.error("[Config] PRIVATE_KEY must be a 0x-prefixed 64-char hex string");
+  console.error("[Config] PRIVATE_KEY 必须是以 0x 开头的 64 位十六进制字符串");
   process.exit(1);
 }
 
 const FUNDER_ADDRESS = process.env.FUNDER_ADDRESS || null;
 if (FUNDER_ADDRESS && !/^0x[0-9a-fA-F]{40}$/.test(FUNDER_ADDRESS)) {
-  console.error("[Config] FUNDER_ADDRESS must be a valid 0x-prefixed address");
+  console.error("[Config] FUNDER_ADDRESS 必须是有效的 0x 地址");
   process.exit(1);
 }
 
 const SIGNATURE_TYPE = parseNumberEnv("SIGNATURE_TYPE", "0", (value) => parseInt(value, 10));
 if (![0, 1, 2].includes(SIGNATURE_TYPE)) {
-  console.error("[Config] SIGNATURE_TYPE must be 0 (EOA), 1 (POLY_PROXY), or 2 (GNOSIS_SAFE)");
+  console.error("[Config] SIGNATURE_TYPE 只能是 0 (EOA)、1 (POLY_PROXY) 或 2 (GNOSIS_SAFE)");
   process.exit(1);
 }
 
 if (SIGNATURE_TYPE === 0 && FUNDER_ADDRESS) {
-  console.warn("[Config] FUNDER_ADDRESS is ignored when SIGNATURE_TYPE=0 (EOA)");
+  console.warn("[Config] 当 SIGNATURE_TYPE=0 (EOA) 时，FUNDER_ADDRESS 会被忽略");
 }
 
 if ((SIGNATURE_TYPE === 1 || SIGNATURE_TYPE === 2) && !FUNDER_ADDRESS) {
-  console.error("[Config] FUNDER_ADDRESS is required when SIGNATURE_TYPE is 1 (POLY_PROXY) or 2 (GNOSIS_SAFE)");
+  console.error("[Config] 当 SIGNATURE_TYPE 为 1 (POLY_PROXY) 或 2 (GNOSIS_SAFE) 时，必须提供 FUNDER_ADDRESS");
   process.exit(1);
 }
 
@@ -104,6 +104,7 @@ const baseConfig = Object.freeze({
   SCAN_INTERVAL_MS: parseNumberEnv("SCAN_INTERVAL_MS", "3600000", (value) => parseInt(value, 10)),
   ORDER_DELAY_MS: parseNumberEnv("ORDER_DELAY_MS", "500", (value) => parseInt(value, 10)),
   SELL_SCAN_INTERVAL_MS: parseNumberEnv("SELL_SCAN_INTERVAL_MS", "180000", (value) => parseInt(value, 10)),
+  SELL_SCAN_CONCURRENCY: parseNumberEnv("SELL_SCAN_CONCURRENCY", "12", (value) => parseInt(value, 10)),
   PAGE_SIZE: parseNumberEnv("PAGE_SIZE", "100", (value) => parseInt(value, 10)),
   MAX_PAGES: parseNumberEnv("MAX_PAGES", "300", (value) => parseInt(value, 10)),
   FETCH_TIMEOUT_MS: parseNumberEnv("FETCH_TIMEOUT_MS", "15000", (value) => parseInt(value, 10)),

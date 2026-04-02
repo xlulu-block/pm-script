@@ -9,10 +9,10 @@ function formatGammaNetworkError(err) {
   const codeText = causeCode ? ` (${causeCode})` : "";
 
   if (PROXY_URL && !DISABLE_PROXY) {
-    return `Unable to reach Gamma API via proxy ${PROXY_URL}${codeText}. Check whether the proxy is running, or set DISABLE_PROXY=true in .env to bypass the proxy.`;
+    return `无法通过代理 ${PROXY_URL}${codeText} 访问 Gamma API。请检查代理是否正常运行，或在 .env 中设置 DISABLE_PROXY=true 以绕过代理。`;
   }
 
-  return `Unable to reach Gamma API${codeText}. If you are in China or another restricted network, set HTTPS_PROXY in .env, for example: HTTPS_PROXY=http://127.0.0.1:7890`;
+  return `无法访问 Gamma API${codeText}。如果你在中国或其他受限网络环境，请在 .env 中设置 HTTPS_PROXY，例如: HTTPS_PROXY=http://127.0.0.1:7890`;
 }
 
 async function fetchPage(offset, retries = 3) {
@@ -33,7 +33,7 @@ async function fetchPage(offset, retries = 3) {
     } catch (err) {
       const causeCode = err?.cause?.code;
       const detail = causeCode ? `${err.message} (${causeCode})` : err.message;
-      console.error(`[Gamma] Page offset=${offset} attempt ${attempt}/${retries} failed: ${detail}`);
+      console.error(`[Gamma] 拉取 offset=${offset} 页面失败，尝试 ${attempt}/${retries}: ${detail}`);
       if (attempt === retries) {
         throw new Error(formatGammaNetworkError(err), { cause: err });
       }
@@ -47,7 +47,7 @@ export async function fetchAllActiveMarkets() {
 
   for (let page = 0; page < MAX_PAGES; page++) {
     const offset = page * PAGE_SIZE;
-    console.log(`[Gamma] Fetching markets offset=${offset}...`);
+    console.log(`[Gamma] 正在拉取市场数据，offset=${offset}...`);
 
     const markets = await fetchPage(offset);
     if (!Array.isArray(markets) || markets.length === 0) break;
@@ -60,10 +60,10 @@ export async function fetchAllActiveMarkets() {
 
   if (allMarkets.length === MAX_PAGES * PAGE_SIZE) {
     console.warn(
-      `[Gamma] Reached configured cap (${MAX_PAGES} pages / ${allMarkets.length} markets). Increase MAX_PAGES in .env if you want to scan more.`
+      `[Gamma] 已达到配置上限（${MAX_PAGES} 页 / ${allMarkets.length} 个市场）。如果想扫描更多，请在 .env 中提高 MAX_PAGES。`
     );
   }
 
-  console.log(`[Gamma] Total active markets fetched: ${allMarkets.length}`);
+  console.log(`[Gamma] 活跃市场拉取完成，总数: ${allMarkets.length}`);
   return allMarkets;
 }

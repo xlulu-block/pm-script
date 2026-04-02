@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
+    "sell": "node src/sell-all.js",
     "dry-run": "node src/index.js --dry-run",
     "doctor": "node src/doctor.js",
     "doctor:state": "node src/doctor.js --from-state --limit 25"

@@ -3,21 +3,16 @@ import { config } from "./config.js";
 import { fetchAllActiveMarkets } from "./gamma.js";
 import { filterMarkets } from "./filters.js";
 import {
-  initClobClient,
-  getBoughtTokenIDs,
-  getExistingOrderTokenIDs,
+  getAccountOpenOrders,
   placeOrdersBatch,
 } from "./clob.js";
 import {
-  getAllTokenIDs,
-  getToken,
-  loadState,
+  getActiveTrackedTokenIDs,
   saveState,
   upsertToken,
   transitionToken,
-  getTokensByState,
 } from "./state.js";
-import { States, TERMINAL_STATES, acquireTokenLock } from "./state-machine.js";
+import { States } from "./state-machine.js";
 
 function unionSets(...sets) {
   return new Set(sets.flatMap((set) => [...set]));
@@ -38,7 +33,7 @@ function logCategorySummary(categoryCounts, excludedCounts) {
   }
   if (excludedCounts) {
     for (const [key, count] of Object.entries(excludedCounts)) {
-      console.log(`EXCLUDED_${key.toUpperCase()}: ${count}`);
+      console.log(`排除_${key.toUpperCase()}: ${count}`);
     }
   }
 }
@@ -69,91 +64,77 @@ async function exportDryRunTargets(targets) {
 
   await writeFile(jsonPath, jsonOutput, "utf8");
   await writeFile(txtPath, txtOutput, "utf8");
-  console.log(`[DRY RUN] Exported targets to ${jsonPath} and ${txtPath}`);
+  console.log(`[DRY RUN] 已导出目标列表到 ${jsonPath} 和 ${txtPath}`);
 }
 
 export async function runBuyScan(client, state, iteration, pendingTokenIDs, circuitBreaker) {
-  console.log("=== Buy Scan ===");
+  console.log("=== 买入扫描 ===");
   console.log(
-    `Price: ${config.ORDER_PRICE}, Size: ${config.ORDER_SIZE}, DRY_RUN: ${config.DRY_RUN}, Iteration: ${iteration}`
+    `价格: ${config.ORDER_PRICE}, 数量: ${config.ORDER_SIZE}, DRY_RUN: ${config.DRY_RUN}, 轮次: ${iteration}`
   );
   console.log();
 
   // Phase 1: Discover
-  console.log("--- Phase 1: DISCOVER ---");
+  console.log("--- 阶段 1: 发现市场 ---");
   const markets = await fetchAllActiveMarkets();
   console.log();
 
   // Phase 2: Filter
-  console.log("--- Phase 2: FILTER ---");
+  console.log("--- 阶段 2: 过滤市场 ---");
   const { categoryCounts, excludedCounts, allTargets } = filterMarkets(markets);
 
   if (allTargets.length === 0) {
-    console.log("[Done] No matching markets found.");
+    console.log("[完成] 没有找到符合条件的市场。");
     return;
   }
   console.log();
 
   // Phase 3: Dedup + Auth
-  console.log("--- Phase 3: AUTH & DEDUP ---");
-  const stateTokenIDs = getAllTokenIDs(state);
-  if (stateTokenIDs.size > 0) {
-    console.log(`[State] Loaded ${stateTokenIDs.size} historical token IDs from ${config.STATE_FILE}`);
-  }
-
+  console.log("--- 阶段 3: 鉴权与去重 ---");
   if (config.DRY_RUN) {
-    console.log("[DRY RUN] Skipping auth and order placement");
+    console.log("[DRY RUN] 跳过鉴权和下单");
     console.log();
-    console.log("--- DRY RUN: Would place orders on these markets ---");
+    console.log("--- DRY RUN: 以下市场原本会被下单 ---");
     for (let i = 0; i < allTargets.length; i++) {
       const { tokenID, question, category } = allTargets[i];
       console.log(`  ${i + 1}. [${category}] "${question}" token=${tokenID.slice(0, 16)}...`);
     }
     await exportDryRunTargets(allTargets);
     console.log();
-    console.log("=== DRY RUN SUMMARY ===");
-    console.log(`Unique targets: ${allTargets.length}`);
-    console.log(`Estimated cost: ${allTargets.length * config.ORDER_PRICE * config.ORDER_SIZE} USDC`);
+    console.log("=== DRY RUN 汇总 ===");
+    console.log(`唯一目标数: ${allTargets.length}`);
+    console.log(`预估成本: ${allTargets.length * config.ORDER_PRICE * config.ORDER_SIZE} USDC`);
     logCategorySummary(categoryCounts, excludedCounts);
     return;
   }
 
   // Check circuit breaker
   if (circuitBreaker.isPaused()) {
-    console.warn("[RISK] Circuit breaker is active — skipping buy scan");
+    console.warn("[RISK] 熔断器已触发，跳过本轮买入扫描");
     return;
   }
 
-  const existingOrderTokenIDs = await getExistingOrderTokenIDs(client);
-  const boughtTokenIDs = await getBoughtTokenIDs(client);
-
-  // Sync bought tokens into state
-  for (const tokenID of boughtTokenIDs) {
-    const existing = getToken(state, tokenID);
-    if (!existing) {
-      upsertToken(state, tokenID, { state: States.FILLED_WAIT_SELL });
-    }
+  const openOrderSnapshot = await getAccountOpenOrders(client);
+  const activeTrackedTokenIDs = getActiveTrackedTokenIDs(state);
+  if (activeTrackedTokenIDs.size > 0) {
+    console.log(`[State] 当前在 ${config.STATE_FILE} 中追踪 ${activeTrackedTokenIDs.size} 个活跃 token`);
   }
-  await saveState(config.STATE_FILE, state);
 
-  // Build blocked set: anything already in state (non-terminal), existing orders, bought, pending
-  const nonTerminalTokenIDs = new Set(
-    Object.values(state.tokens)
-      .filter((t) => !TERMINAL_STATES.has(t.state))
-      .map((t) => t.tokenID)
+  const blockedTokenIDs = unionSets(
+    openOrderSnapshot.tokenIDs,
+    activeTrackedTokenIDs,
+    pendingTokenIDs
   );
-  const blockedTokenIDs = unionSets(existingOrderTokenIDs, boughtTokenIDs, nonTerminalTokenIDs, pendingTokenIDs);
-
-  let targets = allTargets.filter((target) => !blockedTokenIDs.has(target.tokenID));
+  const targets = allTargets.filter((target) => !blockedTokenIDs.has(target.tokenID));
 
   const dedupSkipped = allTargets.length - targets.length;
   if (dedupSkipped > 0) {
-    console.log(`[Dedup] Skipping ${dedupSkipped} markets (already tracked or open)`);
+    console.log(`[Dedup] 跳过 ${dedupSkipped} 个市场（已存在挂单或已在追踪中）`);
   }
   console.log();
 
   // Phase 4: Place orders
-  console.log("--- Phase 4: PLACE ORDERS ---");
+  console.log("--- 阶段 4: 执行下单 ---");
   let success = 0;
   let failed = 0;
   let skippedCount = 0;
@@ -167,7 +148,7 @@ export async function runBuyScan(client, state, iteration, pendingTokenIDs, circ
     if (stopRequested) break;
 
     const batch = batches[batchIndex];
-    console.log(`[Batch ${batchIndex + 1}/${batches.length}] Processing ${batch.length} target(s)`);
+    console.log(`[批次 ${batchIndex + 1}/${batches.length}] 正在处理 ${batch.length} 个目标`);
 
     for (let i = 0; i < batch.length; i++) {
       const absoluteIndex = batchIndex * batchSize + i;
@@ -222,7 +203,7 @@ export async function runBuyScan(client, state, iteration, pendingTokenIDs, circ
         question,
         category,
         tokenID,
-        error: result.error || "Unknown error",
+        error: result.error || "未知错误",
         stopAll: Boolean(result.stopAll),
       });
 
@@ -236,7 +217,7 @@ export async function runBuyScan(client, state, iteration, pendingTokenIDs, circ
     }
 
     if (stopRequested) {
-      console.error("[STOP] Fatal order precondition failed - aborting remaining batches.");
+      console.error("[STOP] 下单前置条件出现致命错误，终止剩余批次。");
       break;
     }
 
@@ -246,11 +227,11 @@ export async function runBuyScan(client, state, iteration, pendingTokenIDs, circ
   }
 
   console.log();
-  console.log("=== BUY SUMMARY ===");
-  console.log(`Total targets: ${allTargets.length}`);
-  console.log(`Skipped (dedup/risk): ${dedupSkipped}`);
-  console.log(`Skipped (order book): ${skippedCount}`);
-  console.log(`Placed: ${success}`);
-  console.log(`Failed: ${failed}`);
+  console.log("=== 买入汇总 ===");
+  console.log(`目标总数: ${allTargets.length}`);
+  console.log(`跳过（去重/风控）: ${dedupSkipped}`);
+  console.log(`跳过（盘口检查）: ${skippedCount}`);
+  console.log(`下单成功: ${success}`);
+  console.log(`下单失败: ${failed}`);
   logCategorySummary(categoryCounts, excludedCounts);
 }
