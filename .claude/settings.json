@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/HP/.claude/skills/pua/references/**)",
+      "Read(//c/Users/HP/**)",
+      "Bash(mkdir -p ~/.pua)",
+      "Bash(~/.pua/config.json)",
+      "WebFetch(domain:legacy-docs.polymarket.com)"
+    ]
+  }
+}

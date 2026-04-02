@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:gamma-api.polymarket.com)",
+      "WebSearch",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:docs.polymarket.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:learn.polymarket.com)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:medium.com)",
+      "Bash(npm install:*)",
+      "Bash(node --check src/config.js)",
+      "Bash(node --check src/gamma.js)",
+      "Bash(node --check src/filters.js)",
+      "Bash(node --check src/clob.js)",
+      "Bash(node --check src/index.js)",
+      "Bash(node -e \"import\\(''@polymarket/clob-client''\\).then\\(m => { console.log\\(''ClobClient:'', typeof m.ClobClient\\); console.log\\(''Exports:'', Object.keys\\(m\\).slice\\(0, 15\\).join\\('', ''\\)\\); }\\).catch\\(e => console.error\\(''FAIL:'', e.message\\)\\)\")",
+      "Bash(node -e \"import\\(''ethers''\\).then\\(m => { const w = new m.ethers.Wallet\\(''0x'' + ''1''.repeat\\(64\\)\\); console.log\\(''ethers version:'', m.ethers.version\\); console.log\\(''Wallet address:'', w.address\\); }\\).catch\\(e => console.error\\(''FAIL:'', e.message\\)\\)\")",
+      "Bash(node -c src/filters.js)",
+      "Bash(node src/doctor.js --limit 5)",
+      "Bash(ls -lh *.json *.jsonl)",
+      "Bash(node --check src/state-machine.js)",
+      "Bash(node --check src/depth.js)",
+      "Bash(node --check src/risk.js)",
+      "Bash(node --check src/state.js)",
+      "Bash(node --check src/orders.js)",
+      "Bash(node --check src/buy-loop.js)",
+      "Bash(node --check src/sell-loop.js)",
+      "Bash(node -e \"import\\('./src/config.js'\\).then\\(m => { console.log\\('Config loaded, ORDER_SIZE:', m.config.ORDER_SIZE\\); console.log\\('BUY_DEPTH_THRESHOLD:', m.config.BUY_DEPTH_THRESHOLD\\); console.log\\('SELL_UPGRADE_THRESHOLD:', m.config.SELL_UPGRADE_THRESHOLD\\); console.log\\('SELL_DOWNGRADE_THRESHOLD:', m.config.SELL_DOWNGRADE_THRESHOLD\\); console.log\\('SELL_SCAN_INTERVAL_MS:', m.config.SELL_SCAN_INTERVAL_MS\\); console.log\\('REPLACE_COOLDOWN_MS:', m.config.REPLACE_COOLDOWN_MS\\); }\\).catch\\(e => console.error\\(e.message\\)\\)\")",
+      "Bash(node -e \"process.env.DRY_RUN='true'; import\\('./src/config.js'\\).then\\(m => { console.log\\('ORDER_SIZE:', m.config.ORDER_SIZE\\); console.log\\('BUY_DEPTH_THRESHOLD:', m.config.BUY_DEPTH_THRESHOLD\\); console.log\\('SELL_UPGRADE_THRESHOLD:', m.config.SELL_UPGRADE_THRESHOLD\\); console.log\\('SELL_DOWNGRADE_THRESHOLD:', m.config.SELL_DOWNGRADE_THRESHOLD\\); console.log\\('SELL_SCAN_INTERVAL_MS:', m.config.SELL_SCAN_INTERVAL_MS\\); console.log\\('REPLACE_COOLDOWN_MS:', m.config.REPLACE_COOLDOWN_MS\\); console.log\\('MIN_SELL_SIZE:', m.config.MIN_SELL_SIZE\\); console.log\\('MAX_QUEUE_AHEAD:', m.config.MAX_QUEUE_AHEAD\\); console.log\\('CIRCUIT_BREAKER_THRESHOLD:', m.config.CIRCUIT_BREAKER_THRESHOLD\\); }\\).catch\\(e => console.error\\(e.message\\)\\)\")",
+      "Bash(node -e ':*)",
+      "Bash(node --check src/doctor.js)"
+    ]
+  }
+}
