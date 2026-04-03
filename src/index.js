@@ -4,6 +4,7 @@ import { loadState } from "./state.js";
 import { runBuyScan } from "./buy-loop.js";
 import { runSellScan } from "./sell-loop.js";
 import { createCircuitBreaker } from "./risk.js";
+import { createWsSellTrigger } from "./ws-sell.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -71,7 +72,11 @@ async function main() {
     return;
   }
 
-  const client = await initClobClient();
+  const { client, creds } = await initClobClient();
+
+  const wsTrigger = createWsSellTrigger(client, creds, state);
+  wsTrigger.start();
+
   const stopSellScheduler = startSellScheduler(client, state);
 
   // Buy loop
@@ -91,6 +96,7 @@ async function main() {
     buyIteration++;
   }
 
+  wsTrigger.stop();
   await stopSellScheduler();
 }
 

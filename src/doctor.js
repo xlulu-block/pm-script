@@ -202,7 +202,7 @@ async function inspectContext(context, signerAddress) {
   );
   console.log(`生效的 funder/maker: ${effectiveAccount}`);
 
-  const client = await initClobClient({
+  const { client } = await initClobClient({
     ensureCollateral: false,
     refreshCollateralCache: false,
     signatureType: context.signatureType,

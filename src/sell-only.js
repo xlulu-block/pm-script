@@ -7,7 +7,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function main() {
   const state = await loadState(config.STATE_FILE);
-  const client = await initClobClient();
+  const { client } = await initClobClient();
   let iteration = 1;
 
   while (true) {

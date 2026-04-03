@@ -548,7 +548,7 @@ export async function initClobClient(options = {}) {
   }
 
   console.log("[CLOB] 客户端初始化成功");
-  return client;
+  return { client, creds };
 }
 
 export async function getAccountOpenOrders(client) {

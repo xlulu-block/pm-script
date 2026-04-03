@@ -158,7 +158,7 @@ async function main() {
   console.log("=== 一键卖出全部持仓 ===");
   console.log(`[SELL-ALL] 目标价格: ${SELL_ALL_PRICE.toFixed(3)}`);
 
-  const client = await initClobClient({
+  const { client } = await initClobClient({
     ensureCollateral: false,
     refreshCollateralCache: false,
   });

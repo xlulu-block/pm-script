@@ -90,7 +90,7 @@ const baseConfig = Object.freeze({
   CLOB_HOST: envOrDefault("CLOB_HOST", "https://clob.polymarket.com"),
   GAMMA_HOST: envOrDefault("GAMMA_HOST", "https://gamma-api.polymarket.com"),
   CHAIN_ID: parseNumberEnv("CHAIN_ID", "137", (value) => parseInt(value, 10)),
-  FILTER_PROFILE: envOrDefault("FILTER_PROFILE", "historical_winners"),
+  FILTER_PROFILE: envOrDefault("FILTER_PROFILE", "crypto_5min"),
   ORDER_PRICE: parseNumberEnv("ORDER_PRICE", "0.001"),
   ORDER_SIZE: parseNumberEnv("ORDER_SIZE", "100", (value) => parseInt(value, 10)),
   DEPTH_MULTIPLIER: parseNumberEnv("DEPTH_MULTIPLIER", "3"),
@@ -128,6 +128,10 @@ const computedConfig = Object.freeze({
   REPLACE_COOLDOWN_MS: parseNumberEnv("REPLACE_COOLDOWN_MS", "45000", (v) => parseInt(v, 10)),
   CIRCUIT_BREAKER_THRESHOLD: parseNumberEnv("CIRCUIT_BREAKER_THRESHOLD", "5", (v) => parseInt(v, 10)),
   MIN_MINUTES_TO_SETTLEMENT: parseNumberEnv("MIN_MINUTES_TO_SETTLEMENT", "60", (v) => parseInt(v, 10)),
+  WS_CLOB_URL: envOrDefault("WS_CLOB_URL", "wss://ws-live-data.polymarket.com"),
+  WS_RECONNECT_BASE_MS: parseNumberEnv("WS_RECONNECT_BASE_MS", "5000", (v) => parseInt(v, 10)),
+  WS_PING_INTERVAL_MS: parseNumberEnv("WS_PING_INTERVAL_MS", "5000", (v) => parseInt(v, 10)),
+  WS_SELL_DEPTH_MULTIPLIER: parseNumberEnv("WS_SELL_DEPTH_MULTIPLIER", "4"),
 });
 
 export { computedConfig as config };

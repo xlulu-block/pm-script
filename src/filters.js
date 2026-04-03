@@ -68,6 +68,15 @@ const HISTORICAL_WINNER_RULES = [
   },
 ];
 
+const CRYPTO_5MIN_RULES = [
+  {
+    key: "CRYPTO_5MIN",
+    test: (text) =>
+      /\b(5[- ]?min(ute)?s?)\b/i.test(text) &&
+      /\b(bitcoin|btc|ethereum|eth\b|ether\b|xrp|ripple|solana|sol\b|dogecoin|doge)\b/i.test(text),
+  },
+];
+
 const EXTREME_REVERSAL_RULES = [
   {
     key: "FED_RATE_DECISION",
@@ -120,6 +129,7 @@ const FILTER_PROFILES = {
   legacy: LEGACY_RULES,
   historical_winners: HISTORICAL_WINNER_RULES,
   extreme_reversal: EXTREME_REVERSAL_RULES,
+  crypto_5min: CRYPTO_5MIN_RULES,
 };
 
 const PROFILE_BEHAVIORS = {
@@ -137,6 +147,12 @@ const PROFILE_BEHAVIORS = {
     scanAll: false,
     excludeAnnual: true,
     excludeCrypto: true,
+  },
+  crypto_5min: {
+    scanAll: false,
+    excludeAnnual: true,
+    excludeCrypto: false,
+    skipNearSettlement: true,
   },
 };
 
@@ -242,9 +258,9 @@ export function filterMarkets(markets) {
       continue;
     }
 
-    // Exclude markets near settlement
+    // Exclude markets near settlement (skip for profiles that target short-lived events)
     const endDate = market.end_date_iso || market.endDate;
-    if (endDate) {
+    if (!behavior.skipNearSettlement && endDate) {
       const msToSettlement = new Date(endDate).getTime() - now;
       if (msToSettlement > 0 && msToSettlement < settlementCutoffMs) {
         excludedCounts.nearSettlement++;
