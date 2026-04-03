@@ -13,7 +13,7 @@
    - order book 必须存在；如果 `STRICT_ORDERBOOK_CHECK=true`，缺失就直接跳过
    - 盘口不能是“只有 ask 没有 bid”
    - `tick_size` 必须等于 `ORDER_PRICE`
-   - 在 `ORDER_PRICE` 这一档的买盘深度，必须大于等于 `3 * ORDER_SIZE`
+   - 在 `ORDER_PRICE` 这一档的买盘深度，必须大于等于 `DEPTH_MULTIPLIER * ORDER_SIZE`
 4. 上面通过后，不会立刻下单，而是再等待 `BUY_DEPTH_DEBOUNCE_MS`，然后重新检查一次 order book；第二次仍满足条件才允许继续。
 5. 最终下的是固定参数的限价买单：
    - `side = BUY`
@@ -37,13 +37,13 @@
    - `sell_open_0.002`
    - `sell_open_0.001`
 3. 卖出判断的核心仍然看 `ORDER_PRICE` 这一档的买盘深度：
-   - 如果该档深度 `< 3 * ORDER_SIZE`，目标卖价定为 `ORDER_PRICE`
-   - 如果该档深度 `>= 3 * ORDER_SIZE`，目标卖价定为 `ORDER_PRICE * 2`
+   - 如果该档深度 `< DEPTH_MULTIPLIER * ORDER_SIZE`，目标卖价定为 `ORDER_PRICE`
+   - 如果该档深度 `>= DEPTH_MULTIPLIER * ORDER_SIZE`，目标卖价定为 `ORDER_PRICE * 2`
 4. 和买单一样，卖出信号也会先判断一次，再等待 `SELL_DEPTH_DEBOUNCE_MS` 复查一次；两次结果一致才执行。
 5. 只要出现以下情况之一，就视为需要“防守式退出”：
    - 整个盘口没有 bid
    - `ORDER_PRICE` 这一档没有 bid
-   - `ORDER_PRICE` 这一档买盘深度小于 `3 * ORDER_SIZE`
+   - `ORDER_PRICE` 这一档买盘深度小于 `DEPTH_MULTIPLIER * ORDER_SIZE`
 6. 触发防守式退出时，系统会进入 `forceClearMarket()`：
    - 先撤掉该 token 的所有 `BUY` 挂单
    - 如果撤买单后发现余额是 0，则直接收尾，不再挂卖单

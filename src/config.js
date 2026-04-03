@@ -93,6 +93,7 @@ const baseConfig = Object.freeze({
   FILTER_PROFILE: envOrDefault("FILTER_PROFILE", "historical_winners"),
   ORDER_PRICE: parseNumberEnv("ORDER_PRICE", "0.001"),
   ORDER_SIZE: parseNumberEnv("ORDER_SIZE", "100", (value) => parseInt(value, 10)),
+  DEPTH_MULTIPLIER: parseNumberEnv("DEPTH_MULTIPLIER", "3"),
   POST_ONLY: parseBooleanEnv("POST_ONLY", true),
   STRICT_ORDERBOOK_CHECK: parseBooleanEnv("STRICT_ORDERBOOK_CHECK", true),
   ORDER_BATCH_SIZE: parseNumberEnv("ORDER_BATCH_SIZE", "10", (value) => parseInt(value, 10)),

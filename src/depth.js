@@ -1,4 +1,3 @@
-export const DEPTH_MULTIPLIER = 3;
 export const PRICE_DECIMALS = 3;
 
 export function formatPrice(value) {
@@ -15,10 +14,16 @@ export function getTargetSellPrice(cfg) {
   return formatPrice(Number(cfg?.ORDER_PRICE || 0) * 2);
 }
 
-export function analyzeBidDepth(orderBook, cfg) {
+export function analyzeBidDepth(orderBook, cfg, options = {}) {
   const buyPriceLevel = getBuyPriceLevel(cfg);
+  const excludedBidSharesAtBuyPrice = Math.max(
+    0,
+    Number(options?.excludeBidSizeAtBuyPrice || 0)
+  );
   const result = {
     bidSharesAtBuyPrice: 0,
+    observedBidSharesAtBuyPrice: 0,
+    excludedBidSharesAtBuyPrice,
     buyPriceLevel,
     targetSellPrice: getTargetSellPrice(cfg),
     hasAnyBids: false,
@@ -42,15 +47,20 @@ export function analyzeBidDepth(orderBook, cfg) {
     result.hasAnyBids = true;
     const price = String(level?.price || "");
     if (price === buyPriceLevel) {
-      result.bidSharesAtBuyPrice += size;
+      result.observedBidSharesAtBuyPrice += size;
     }
   }
+
+  result.bidSharesAtBuyPrice = Math.max(
+    0,
+    result.observedBidSharesAtBuyPrice - result.excludedBidSharesAtBuyPrice
+  );
 
   return result;
 }
 
 export function getDepthThreshold(cfg) {
-  return DEPTH_MULTIPLIER * Number(cfg?.ORDER_SIZE || 0);
+  return Number(cfg?.DEPTH_MULTIPLIER || 3) * Number(cfg?.ORDER_SIZE || 0);
 }
 
 export function shouldBuy(depth, cfg) {

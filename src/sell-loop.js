@@ -235,6 +235,22 @@ function getHeldShares(balance, sellOrders) {
   return normalizedAvailableBalance + getTotalOpenSellSize(sellOrders);
 }
 
+function getOpenBuySizeAtBuyPrice(buyOrders) {
+  const buyPrice = getBuyPriceLevel(config);
+  return buyOrders.reduce((total, order) => {
+    if (normalizeSellOrderPrice(order) !== buyPrice) return total;
+    const remainingSize = getRemainingOrderSize(order);
+    return total + (remainingSize ?? 0);
+  }, 0);
+}
+
+function hasOnlyBuyOrdersAtBuyPrice(buyOrders) {
+  if (buyOrders.length === 0) return false;
+
+  const buyPrice = getBuyPriceLevel(config);
+  return buyOrders.every((order) => normalizeSellOrderPrice(order) === buyPrice);
+}
+
 function isSizeAligned(orderSize, balance) {
   return Math.abs(orderSize - balance) < 1e-6;
 }
@@ -405,7 +421,15 @@ async function forceClearMarket(client, state, token, orderBook, balance, buyOrd
   });
   if (result.success) {
     await syncTrackedSell(state, token, freshBalance, result.orderID, buyPrice);
+    return;
   }
+
+  await transitionToken(state, token.tokenID, States.FILLED_WAIT_SELL, {
+    buyOrderId: null,
+    sellOrderId: null,
+    sellPrice: null,
+    filledShares: freshBalance,
+  });
 }
 
 async function fetchOrderBookForToken(client, tokenID) {
@@ -413,20 +437,68 @@ async function fetchOrderBookForToken(client, tokenID) {
   return books.get(tokenID) || null;
 }
 
-function getForceExitReason(depth, threshold) {
+function getNetForceExitReason(depth, threshold) {
   if (!depth.hasAnyBids) {
-    return "盘口中没有买单";
+    return "no bids in book";
   }
+
   if (depth.bidSharesAtBuyPrice <= 0) {
-    return `盘口中没有 ${depth.buyPriceLevel} 档买单`;
+    if (depth.excludedBidSharesAtBuyPrice > 0 && depth.observedBidSharesAtBuyPrice > 0) {
+      return `no external ${depth.buyPriceLevel} bids after excluding own BUY size ${depth.excludedBidSharesAtBuyPrice}`;
+    }
+    return `no ${depth.buyPriceLevel} bids in book`;
   }
-  return `${depth.buyPriceLevel} 档买盘深度 (${depth.bidSharesAtBuyPrice}) 低于阈值 ${threshold}`;
+
+  if (depth.excludedBidSharesAtBuyPrice > 0) {
+    return `${depth.buyPriceLevel} net bid depth (${depth.bidSharesAtBuyPrice}, observed ${depth.observedBidSharesAtBuyPrice}, own ${depth.excludedBidSharesAtBuyPrice}) below threshold ${threshold}`;
+  }
+
+  return `${depth.buyPriceLevel} bid depth (${depth.bidSharesAtBuyPrice}) below threshold ${threshold}`;
 }
 
-async function confirmSellDecision(client, token, orderBook) {
-  const initialDepth = analyzeBidDepth(orderBook, config);
+async function refreshBuyOrdersForDecision(client, tokenID, currentBuyOrders) {
+  if (currentBuyOrders.length === 0) {
+    return currentBuyOrders;
+  }
+
+  try {
+    const openOrders = await client.getOpenOrders({ asset_id: tokenID });
+    if (!Array.isArray(openOrders)) {
+      return currentBuyOrders;
+    }
+
+    return openOrders.filter(
+      (order) => String(order?.side || "").toUpperCase() === "BUY"
+    );
+  } catch (err) {
+    console.warn(
+      `[SELL] Failed to refresh BUY orders for ${tokenID.slice(0, 12)}...: ${err.message}`
+    );
+    return currentBuyOrders;
+  }
+}
+
+async function confirmSellDecisionWithNetDepth(client, token, orderBook, buyOrders = []) {
+  const shouldCheckBuyDepth = hasOnlyBuyOrdersAtBuyPrice(buyOrders);
+  const initialDepth = analyzeBidDepth(
+    orderBook,
+    config,
+    shouldCheckBuyDepth
+      ? { excludeBidSizeAtBuyPrice: getOpenBuySizeAtBuyPrice(buyOrders) }
+      : undefined
+  );
   const initialTargetPrice = decideSellPrice(initialDepth, config);
-  const initialForceExit = shouldForceExit(initialDepth, config);
+  const initialForceExit = shouldCheckBuyDepth && shouldForceExit(initialDepth, config);
+
+  if (!shouldCheckBuyDepth) {
+    return {
+      confirmed: true,
+      orderBook,
+      depth: initialDepth,
+      targetPrice: initialTargetPrice,
+      shouldForceExit: false,
+    };
+  }
 
   if (config.SELL_DEPTH_DEBOUNCE_MS <= 0) {
     return {
@@ -438,24 +510,40 @@ async function confirmSellDecision(client, token, orderBook) {
     };
   }
 
-  console.log(`[SELL] 对 ${token.question} 的卖出决策执行 ${config.SELL_DEPTH_DEBOUNCE_MS}ms 防抖复核`);
+  console.log(
+    `[SELL] Debouncing sell decision for ${token.question} (${config.SELL_DEPTH_DEBOUNCE_MS}ms)`
+  );
   await sleep(config.SELL_DEPTH_DEBOUNCE_MS);
 
   const refreshedBook = await fetchOrderBookForToken(client, token.tokenID);
   if (!refreshedBook) {
-    return { confirmed: false, reason: "防抖复核期间无法获取盘口" };
+    return { confirmed: false, reason: "failed to refresh order book during sell debounce" };
   }
 
-  const refreshedDepth = analyzeBidDepth(refreshedBook, config);
+  const refreshedBuyOrders = await refreshBuyOrdersForDecision(
+    client,
+    token.tokenID,
+    buyOrders
+  );
+  const refreshedShouldCheckBuyDepth = hasOnlyBuyOrdersAtBuyPrice(refreshedBuyOrders);
+  const refreshedDepth = analyzeBidDepth(
+    refreshedBook,
+    config,
+    refreshedShouldCheckBuyDepth
+      ? { excludeBidSizeAtBuyPrice: getOpenBuySizeAtBuyPrice(refreshedBuyOrders) }
+      : undefined
+  );
   const refreshedTargetPrice = decideSellPrice(refreshedDepth, config);
-  const refreshedForceExit = shouldForceExit(refreshedDepth, config);
+  const refreshedForceExit =
+    refreshedShouldCheckBuyDepth && shouldForceExit(refreshedDepth, config);
   if (
+    shouldCheckBuyDepth !== refreshedShouldCheckBuyDepth ||
     initialForceExit !== refreshedForceExit ||
     initialTargetPrice !== refreshedTargetPrice
   ) {
     return {
       confirmed: false,
-      reason: `卖出信号不稳定（${initialTargetPrice} -> ${refreshedTargetPrice}）`,
+      reason: `sell signal changed during debounce (${initialTargetPrice} -> ${refreshedTargetPrice})`,
       orderBook: refreshedBook,
       depth: refreshedDepth,
     };
@@ -583,11 +671,6 @@ async function processSingleSellToken(client, state, token, openOrderSnapshot) {
   if (trackedToken) trackedToken.filledShares = heldShares;
   const sellOrderInfo = inspectSellOrders(sellOrders);
 
-  // Open BUY orders with zero held shares are not actionable sell inventory.
-  if (buyOrders.length > 0 && heldShares <= 0 && token.state === States.BUY_OPEN) {
-    return;
-  }
-
   if (
     buyOrders.length === 0 &&
     heldShares > 0 &&
@@ -648,7 +731,7 @@ async function processSingleSellToken(client, state, token, openOrderSnapshot) {
     return;
   }
 
-  const decision = await confirmSellDecision(client, token, orderBook);
+  const decision = await confirmSellDecisionWithNetDepth(client, token, orderBook, buyOrders);
   if (!decision.confirmed) {
     if (trackedToken && decision.depth) {
       trackedToken.lastSeenBidSharesAtOrderPrice = decision.depth.bidSharesAtBuyPrice;
@@ -661,6 +744,20 @@ async function processSingleSellToken(client, state, token, openOrderSnapshot) {
   const targetSellPrice = decision.targetPrice;
   if (trackedToken) trackedToken.lastSeenBidSharesAtOrderPrice = depth.bidSharesAtBuyPrice;
 
+  if (buyOrders.length === 0 && heldShares > 0) {
+    await forceClearMarket(
+      client,
+      state,
+      token,
+      decision.orderBook,
+      heldShares,
+      buyOrders,
+      sellOrders,
+      "no BUY orders remaining while holding shares"
+    );
+    return;
+  }
+
   if (decision.shouldForceExit) {
     await forceClearMarket(
       client,
@@ -670,7 +767,7 @@ async function processSingleSellToken(client, state, token, openOrderSnapshot) {
       heldShares,
       buyOrders,
       sellOrders,
-      getForceExitReason(depth, getDepthThreshold(config))
+      getNetForceExitReason(depth, getDepthThreshold(config))
     );
     return;
   }

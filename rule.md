@@ -13,6 +13,7 @@
 - `POST_ONLY=true`
 - `STRICT_ORDERBOOK_CHECK=true`
 - `BUY_DEPTH_DEBOUNCE_MS=3000`
+- `DEPTH_MULTIPLIER=3`
 - `SELL_DEPTH_DEBOUNCE_MS=3000`
 - `SELL_SCAN_INTERVAL_MS=180000`
 - `SCAN_INTERVAL_MS=3600000`
@@ -26,7 +27,7 @@
 
 - 买入价位固定为 `0.001`
 - 目标卖出价位固定为 `0.002`，即 `ORDER_PRICE * 2`
-- 深度阈值固定为 `3 * ORDER_SIZE`
+- 深度阈值为 `DEPTH_MULTIPLIER * ORDER_SIZE`
 - 在当前配置下，深度阈值是 `360`
 - 单笔买单名义占用约为 `0.001 * 120 = 0.12 USDC`
 
@@ -160,7 +161,7 @@
 2. 如果盘口是“只有卖盘、没有买盘”，直接跳过
 3. `tick_size` 必须严格等于 `ORDER_PRICE`，当前必须等于 `0.001`
 4. 盘口里必须存在任意有效买盘
-5. `0.001` 档的买盘份额总和必须 `>= 3 * ORDER_SIZE`
+5. `0.001` 档的买盘份额总和必须 `>= DEPTH_MULTIPLIER * ORDER_SIZE`
 6. 等待 `BUY_DEPTH_DEBOUNCE_MS=3000` 后再检查一次，二次检查也必须继续满足
 
 所以当前买入门槛的精确表述是：

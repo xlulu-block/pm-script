@@ -77,6 +77,7 @@ HTTPS_PROXY=http://127.0.0.1:7897
 FILTER_PROFILE=historical_winners
 ORDER_PRICE=0.001
 ORDER_SIZE=100
+DEPTH_MULTIPLIER=3
 BUY_DEPTH_DEBOUNCE_MS=3000
 SELL_DEPTH_DEBOUNCE_MS=3000
 RUN_FOREVER=true
@@ -92,9 +93,10 @@ MAX_PAGES=300
 - `FILTER_PROFILE`: 当前建议用 `historical_winners`
 - `ORDER_PRICE`: 限价单价格
 - `ORDER_SIZE`: 每笔下单的 shares 数量
-- 买入前要求 `0.001` 档买盘达到 `3 * ORDER_SIZE`，并在防抖等待后再次确认
-- 卖出侧只保留一个强制清仓触发器：如果 `0.001` 档买盘小于 `3 * ORDER_SIZE`，或者已经没有 `0.001` 买盘，就撤掉该 token 的未完成买单；若已有持仓，则立即按 `0.001` 限价卖出全部；否则按 `0.002` 限价卖出全部
-- `BUY_DEPTH_DEBOUNCE_MS` / `SELL_DEPTH_DEBOUNCE_MS`: 3 倍深度判断的防抖时间
+- `DEPTH_MULTIPLIER`: 深度阈值倍数，实际阈值为 `DEPTH_MULTIPLIER * ORDER_SIZE`
+- 买入前要求 `0.001` 档买盘达到 `DEPTH_MULTIPLIER * ORDER_SIZE`，并在防抖等待后再次确认
+- 卖出侧只保留一个强制清仓触发器：如果 `0.001` 档买盘小于 `DEPTH_MULTIPLIER * ORDER_SIZE`，或者已经没有 `0.001` 买盘，就撤掉该 token 的未完成买单；若已有持仓，则立即按 `0.001` 限价卖出全部；否则按 `0.002` 限价卖出全部
+- `BUY_DEPTH_DEBOUNCE_MS` / `SELL_DEPTH_DEBOUNCE_MS`: 深度阈值判断的防抖时间
 - `RUN_FOREVER=true`: 持续扫描
 - `SCAN_INTERVAL_MS=3600000`: 每 1 小时扫描一次
 - `MAX_PAGES=300`: 当前可扫最多约 30000 个市场
