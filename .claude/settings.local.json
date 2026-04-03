@@ -31,7 +31,8 @@
       "Bash(node -e \"import\\('./src/config.js'\\).then\\(m => { console.log\\('Config loaded, ORDER_SIZE:', m.config.ORDER_SIZE\\); console.log\\('BUY_DEPTH_THRESHOLD:', m.config.BUY_DEPTH_THRESHOLD\\); console.log\\('SELL_UPGRADE_THRESHOLD:', m.config.SELL_UPGRADE_THRESHOLD\\); console.log\\('SELL_DOWNGRADE_THRESHOLD:', m.config.SELL_DOWNGRADE_THRESHOLD\\); console.log\\('SELL_SCAN_INTERVAL_MS:', m.config.SELL_SCAN_INTERVAL_MS\\); console.log\\('REPLACE_COOLDOWN_MS:', m.config.REPLACE_COOLDOWN_MS\\); }\\).catch\\(e => console.error\\(e.message\\)\\)\")",
       "Bash(node -e \"process.env.DRY_RUN='true'; import\\('./src/config.js'\\).then\\(m => { console.log\\('ORDER_SIZE:', m.config.ORDER_SIZE\\); console.log\\('BUY_DEPTH_THRESHOLD:', m.config.BUY_DEPTH_THRESHOLD\\); console.log\\('SELL_UPGRADE_THRESHOLD:', m.config.SELL_UPGRADE_THRESHOLD\\); console.log\\('SELL_DOWNGRADE_THRESHOLD:', m.config.SELL_DOWNGRADE_THRESHOLD\\); console.log\\('SELL_SCAN_INTERVAL_MS:', m.config.SELL_SCAN_INTERVAL_MS\\); console.log\\('REPLACE_COOLDOWN_MS:', m.config.REPLACE_COOLDOWN_MS\\); console.log\\('MIN_SELL_SIZE:', m.config.MIN_SELL_SIZE\\); console.log\\('MAX_QUEUE_AHEAD:', m.config.MAX_QUEUE_AHEAD\\); console.log\\('CIRCUIT_BREAKER_THRESHOLD:', m.config.CIRCUIT_BREAKER_THRESHOLD\\); }\\).catch\\(e => console.error\\(e.message\\)\\)\")",
       "Bash(node -e ':*)",
-      "Bash(node --check src/doctor.js)"
+      "Bash(node --check src/doctor.js)",
+      "Bash(ls order-errors*)"
     ]
   }
 }

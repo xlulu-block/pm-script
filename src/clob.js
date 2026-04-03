@@ -6,6 +6,10 @@ import { analyzeBidDepth, getBuyPriceLevel, getDepthThreshold, shouldBuy } from 
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DEFAULT_ORDER_SIDE = "BUY";
+const BOUGHT_TOKEN_IDS_CACHE_TTL_MS = Math.max(60_000, Number(config.SELL_SCAN_INTERVAL_MS || 0));
+
+let boughtTokenIDsCache = null;
+let boughtTokenIDsCacheExpiresAt = 0;
 
 function countActiveBookLevels(levels) {
   if (!Array.isArray(levels)) return 0;
@@ -568,7 +572,13 @@ export async function getExistingOrderTokenIDs(client) {
   return snapshot.tokenIDs;
 }
 
-export async function getBoughtTokenIDs(client) {
+export async function getBoughtTokenIDs(client, options = {}) {
+  const forceRefresh = options.forceRefresh ?? false;
+  if (!forceRefresh && boughtTokenIDsCache && boughtTokenIDsCacheExpiresAt > Date.now()) {
+    console.log(`[CLOB] Using cached BUY trade token IDs (${boughtTokenIDsCache.length})`);
+    return new Set(boughtTokenIDsCache);
+  }
+
   try {
     const trades = await client.getTrades();
     const tokenIDs = new Set();
@@ -582,6 +592,8 @@ export async function getBoughtTokenIDs(client) {
     }
 
     console.log(`[CLOB] 从交易历史中找到 ${tokenIDs.size} 个买入过的 token ID`);
+    boughtTokenIDsCache = [...tokenIDs];
+    boughtTokenIDsCacheExpiresAt = Date.now() + BOUGHT_TOKEN_IDS_CACHE_TTL_MS;
     return tokenIDs;
   } catch (err) {
     console.warn(`[CLOB] 获取交易历史失败（将继续执行，但不做已买入去重）: ${err.message}`);
